@@ -18,6 +18,7 @@ import os
 import cPickle as pickle
 import factor
 import unittest
+import matplotlib.pylab as plt
 
 
 logger = logging.getLogger(__name__)
@@ -71,23 +72,24 @@ class DFG(object):
 
 
         if self.output_type == 'real':
-            self.loss = lambda y : self.mse(y)
+            # mse + error between predicted latent and target latent
+            self.loss = lambda y : self.mse(y) + T.mean((self.z_pred - self.z[self.order:]) ** 2)
+            self.test_loss = lambda y : self.mse(y)
         else:
             raise NotImplementedError
 
     def mse(self, y):
         # error between output and target
-        # error between predicted latent and target latent
-        return T.mean((self.y_pred - y) ** 2) + T.mean((self.z_pred - self.z[self.order:]) ** 2)
+        return T.mean((self.y_pred - y) ** 2)
 
 
 class MetaDFG(BaseEstimator):
-    def __init__(self, n_hidden, n_obsv, n_step, order, learning_rate=0.01,
-                n_epochs=1000, batch_size=100, L1_reg=0.00, L2_reg=0.00,
+    def __init__(self, n_hidden, n_obsv, n_step, order, learning_rate=0.1,
+                n_epochs=100, batch_size=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=1,
                 factor_type='FIR', activation='tanh', output_type='real', final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=5,
-                snapshot_every=None, snapshot_path='/tmp'):
+                snapshot_every=None, snapshot_path='tmp/'):
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
         self.n_step = int(n_step)
@@ -98,6 +100,7 @@ class MetaDFG(BaseEstimator):
         self.batch_size = int(batch_size)
         self.L1_reg = float(L1_reg)
         self.L2_reg = float(L2_reg)
+        self.smooth_reg = float(smooth_reg)
         self.factor_type = factor_type
         self.activation = activation
         self.output_type = output_type
@@ -141,6 +144,7 @@ class MetaDFG(BaseEstimator):
                                            mode=mode)
         else:
             raise NotImplementedError
+
     def shared_dataset(self, data):
         """ Load the dataset into shared variables """
 
@@ -148,16 +152,38 @@ class MetaDFG(BaseEstimator):
                                             dtype=theano.config.floatX))
         return shared_data
 
+    def __getstate__(self):
+        params = self.get_params() # all the parameters in self.__init__
+        weights_E = [p.get_value() for p in self.dfg.params_Estep]
+        weights_M = [p.get_value() for p in self.dfg.params_Mstep]
+        state = (params, weights_E, weights_M)
+        return state
+
+    def __setstate__(self, state)
+        pass
+
     def fit(self, Y_train, Y_test=None,
             validation_frequency=100):
         """Fit model
-            Y_train : ndarray (n_seq, n_t, n_out)
+
+        Pass in Y_test to compute test error and report during training
+            Y_train : ndarray (n_seq, n_step, n_out)
+            Y_test  : ndarray (n_seq, n_step, n_out)
+
+        validation_frequency : int
+            in terms of number of epoch
         """
 
 
-        self.interactive = False
+        if Y_test is not None:
+            self.interactive = True
+            test_set_y = self.shared_dataset(Y_test)
+        else:
+            self.interactive = False
         train_set_y = self.shared_dataset(Y_train)
         n_train = train_set_y.get_value(borrow=True).shape[0]
+        if self.interactive:
+            n_test = test_set_y.get_value(borrow=True).shape[0]
 
         logger.info('...building the model')
 
@@ -169,6 +195,11 @@ class MetaDFG(BaseEstimator):
         cost = self.dfg.loss(self.y) \
                 + self.L1_reg * self.dfg.L1 \
                 + self.L2_reg * self.dfg.L2_sqr
+
+        diag = np.zeros((self.n_step + self.order, self.n_step + self.order),
+                        dtype=theano.config.floatX)
+        np.fill_diagonal(diag[:,1:], 1)
+        cost = cost + self.smooth_reg * T.mean((self.dfg.factor.z - T.dot(diag, self.dfg.factor.z))[:-1] ** 2)
 
         # compute the gradient of cost with respect to theta = (W, W_in, W_out)
         # gradients on the weights using BPTT
@@ -209,11 +240,14 @@ class MetaDFG(BaseEstimator):
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
         train_model_Mstep = theano.function(inputs=[index, l_r, mom],
-                                        outputs=cost,
+                                        outputs=[cost, self.dfg.factor.y_pred],
                                         updates=updates_Mstep,
                                         givens=OrderedDict([(self.y, train_set_y[index])]),
                                         mode=mode)
-
+        test_model = theano.function(inputs=[],
+                                    outputs=[self.dfg.factor.y_next],
+                                    #givens=OrderedDict([(self.y, test_set_y[index])]),
+                                    mode=mode)
         ###############
         # TRAIN MODEL #
         ###############
@@ -236,25 +270,57 @@ class MetaDFG(BaseEstimator):
                 effective_momentum = self.final_momentum \
                                if epoch > self.momentum_switchover \
                                else self.initial_momentum
-                example_cost = train_model_Mstep(idx, self.learning_rate,
+                example_cost, example_y_pred = train_model_Mstep(idx, self.learning_rate,
                                             effective_momentum)
                 average_cost += example_cost
             logger.info('epoch %d M_step cost=%f' % (epoch, average_cost / n_train))
-            self.learning_rate *= self.learning_rate_decay
+            if epoch % 500 == 0:
+                self.learning_rate *= self.learning_rate_decay
+            if self.snapshot_every is not None:
+                if epoch % self.snapshot_every == 0:
+                    date_obj = datetime.datetime.now()
+                    date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
+                    class_name = self.__class__.__name__
+                    fname = '%s.%s-snapshot-%d.png' % (class_name, date_str, epoch)
+                    plt.figure()
+                    n = Y_train[0].shape[0] + Y_test[0].shape[0]
+                    x = np.linspace(0, n, n)
+                    len_train = Y_train[0].shape[0]
+                    x_train, x_test = x[:len_train], x[len_train:]
+                    plt.plot(x_train, np.squeeze(Y_train[0]), 'b', linewidth=2)
+                    plt.plot(x_train, np.squeeze(example_y_pred), 'r', linewidth=2)
+                    plt.savefig(self.snapshot_path + fname)
+                    plt.close()
+                    if self.interactive:
+                        test_predict = test_model()
+                        #logger.info('epoch %d test loss=%f' % (epoch, test_loss))
+                        plt.figure()
+                        plt.plot(x_test, np.squeeze(Y_test[0]), 'b', linewidth=2)
+                        plt.plot(x_test, np.squeeze(test_predict), 'r', linewidth=2)
+                        fname = '%s.%s-snapshot-%d_test.png' % (class_name, date_str, epoch)
+                        plt.ylim(-5, 5)
+                        plt.savefig(self.snapshot_path + fname)
+                        plt.close()
 
 
 class sinTestCase(unittest.TestCase):
     def runTest(self):
-        n = 100
-        x = np.linspace(100, 200, n)
+        n = 500
+        x = np.linspace(0, n, n)
         sita = [.2, .331, .42, .51, .74]
+        sita = sita[:1]
         y = np.zeros(n)
         for item in sita:
             y += np.sin(item * x)
         # n_seq x n_t x n_in
-        y = y.reshape(1, n, 1)
-        dfg = MetaDFG(n_hidden=5, n_obsv=1, n_step=n, order=11)
-        dfg.fit(y)
+        n_train = 450
+        n_test = 50
+        y_train = y[:n_train]
+        y_test = y[n_train:]
+        y_train = y_train.reshape(1, n_train, 1)
+        y_test = y_test.reshape(1, n_test, 1)
+        dfg = MetaDFG(n_hidden=1, n_obsv=1, n_step=n_train, order=15, learning_rate=0.1, n_epochs=1000, snapshot_every=10, L1_reg=0.00, L2_reg=0.01, smooth_reg=0.01, learning_rate_decay=.1)
+        dfg.fit(y_train, y_test)
         assert True
 
 if __name__ == "__main__":
