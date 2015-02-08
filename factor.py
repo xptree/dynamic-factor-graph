@@ -21,26 +21,32 @@ class Factor(object):
         self.order = order
         self.start = start
         self.n_iter = n_iter
+        # initialize np.random
+        #np.random.seed(20)
         # we consider g as linear observation models
         # Y(t) = g(W_o, Z(t))
+        W_o_bound = n_obsv
         W_o_init = np.asarray(np.random.uniform(size=(n_hidden, n_obsv),
-                                    low=-0.1, high=0.1),
+                                    low=-1.0 / W_o_bound, high=1.0 / W_o_bound),
                                     dtype=theano.config.floatX)
         self.W_o = theano.shared(value=W_o_init, name='W_o')
         b_o_init = np.zeros((n_obsv,), dtype=theano.config.floatX)
         self.b_o = theano.shared(value=b_o_init, name='b_o')
         #z0_init = np.zeros(size=(order, n_hidden), dtype=theano.config.floatX)
         #self.z0 = theano.shared(value=z0_init, name='z0')
-        z_bound = np.sqrt(order * n_hidden)
         z_bound = n_hidden
         z_init = np.asarray(np.random.uniform(size=(n_step + order, n_hidden),
-                                low=-1.0 / z_bound, high=1. / z_bound),
+                                low=-1.0 / z_bound, high=1.0 / z_bound),
                                 dtype=theano.config.floatX)
         self.z = theano.shared(value=z_init, name='z')
         self.params_Estep = [self.z]
         self.params_Mstep = [self.W_o, self.b_o]
-        self.L1 = abs(self.W_o).sum() + abs(self.z).sum()
-        self.L2_sqr = (self.W_o ** 2).sum() + (self.z ** 2).sum()
+        self.L1 = abs(self.W_o).sum()
+                #+ abs(self.b_o).sum()
+                #+ abs(self.z).sum()
+        self.L2_sqr = (self.W_o ** 2).sum()
+                #+ (self.b_o ** 2).sum()
+                #+ (self.z ** 2).sum()
 
 class FIR(Factor):
     def __init__(self, n_hidden, n_obsv, n_step, order, start, n_iter):

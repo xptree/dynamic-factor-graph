@@ -13,6 +13,7 @@ import theano.tensor as T
 from sklearn.base import BaseEstimator
 import logging
 import time
+import json
 import datetime
 import os
 import cPickle as pickle
@@ -27,6 +28,7 @@ theano.config.exception_verbosity='high'
 #mode = 'DebugMode'
 mode = 'FAST_COMPILE'
 #mode = 'ProfileMode'
+DEBUG = True
 
 class DFG(object):
     """     Dynamic factor graph class
@@ -78,9 +80,9 @@ class DFG(object):
 
         # Loss = ||Z*(t)-Z(t)||^2 + ||Y*(t) - Y(t)||^2
         self.z_std = self.z[self.start + self.order: self.start + self.order + self.n_iter]
-        self.loss_Estep = lambda y : self.mse(self.y_pred, y) + self.mse(self.z_pred, self.z[self.order:])
-        self.loss_Mstep = lambda y : self.mse(self.y_next, y) + self.mse(self.z_next, self.z_std)
-        self.test_loss = lambda y : self.mse(self.y_next, y)
+        self.loss_Estep = lambda y : self.se(self.y_pred, y) + self.se(self.z_pred, self.z[self.order:])
+        self.loss_Mstep = lambda y : self.se(self.y_next, y) + self.se(self.z_next, self.z_std)
+        self.test_loss = lambda y : self.se(self.y_next, y)
 
         # Smooth Term ||Z(t+1)-Z(t)||^2
         # Estep
@@ -95,9 +97,14 @@ class DFG(object):
         diag_Mstep = T.set_subtensor(diag_Mstep[-1, -1], 1)
         z_tm1_next = T.dot(diag_Mstep, self.z_next)
         self.smooth_Mstep = self.mse(self.z_next, z_tm1_next)
+    def se(self, y_1, y_2):
+        return T.sum((y_1 - y_2) ** 2)
     def mse(self, y_1, y_2):
         # error between output and target
         return T.mean((y_1 - y_2) ** 2)
+    def nmse(self, y_1, y_2):
+        # treat y_1 as the approximation to y_2
+        return self.mse(y_1, y_2) / self.mse(y_2, 0)
 
 
 class MetaDFG(BaseEstimator):
@@ -106,7 +113,8 @@ class MetaDFG(BaseEstimator):
                 learning_rate_decay=1, learning_rate_decay_every=100,
                 factor_type='FIR', activation='tanh', final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=5,
-                n_iters=[1,], n_iter_change_every=None, snapshot_every=None, snapshot_path='tmp/'):
+                n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
+                snapshot_every=None, snapshot_path='tmp/'):
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
         self.n_step = int(n_step)
@@ -125,8 +133,10 @@ class MetaDFG(BaseEstimator):
         self.initial_momentum = float(initial_momentum)
         self.final_momentum = float(final_momentum)
         self.momentum_switchover = int(momentum_switchover)
-        self.n_iters = n_iters
-        self.n_iter_change_every = n_iter_change_every
+        self.n_iter_low = n_iter_low
+        self.n_iter_high = n_iter_high
+        assert(len(self.n_iter_low) == len(self.n_iter_high))
+        self.n_iter_change_every = int(n_iter_change_every)
         if snapshot_every is not None:
             self.snapshot_every = int(snapshot_every)
         else:
@@ -165,10 +175,10 @@ class MetaDFG(BaseEstimator):
                                             dtype=theano.config.floatX))
         return shared_data
 
-    def __getstate__(self):
+    def __getstate__(self, jsonobj=False):
         params = self.get_params() # all the parameters in self.__init__
-        weights_E = [p.get_value() for p in self.dfg.params_Estep]
-        weights_M = [p.get_value() for p in self.dfg.params_Mstep]
+        weights_E = [p.get_value().tolist() if jsonobj else p.get_value() for p in self.dfg.params_Estep]
+        weights_M = [p.get_value().tolist() if jsonobj else p.get_value() for p in self.dfg.params_Mstep]
         weights = (weights_E, weights_M)
         state = (params, weights)
         return state
@@ -193,6 +203,8 @@ class MetaDFG(BaseEstimator):
         fpathstart, fpathext = os.path.splitext(fpath)
         if fpathext == '.pkl':
             fpath, fname = os.path.split(fpath)
+        elif fpathext == '.json':
+            fpath, fname = os.path.split(fpath)
         elif fname is None:
             # Generate filename based on date
             date_obj = datetime.datetime.now()
@@ -203,8 +215,13 @@ class MetaDFG(BaseEstimator):
         fabspath = os.path.join(fpath, fname)
         logger.info('Saving to %s ...' % fabspath)
         with open(fabspath, 'wb') as file:
-            state = self.__getstate__()
-            pickle.dump(state, file, protocol=pickle.HIGHEST_PROTOCOL)
+            if fpathext == '.json':
+                state = self.__getstate__(jsonobj=True)
+                json.dump(state, file,
+                            indent=4, separators=(',', ': '))
+            else:
+                state = self.__getstate__()
+                pickle.dump(state, file, protocol=pickle.HIGHEST_PROTOCOL)
 
     def load(self, fpath):
         """ Load model parameters from fpath. """
@@ -285,14 +302,14 @@ class MetaDFG(BaseEstimator):
         # cost, but in the same time updates the parameter of the
         # model based on the rules defined in `updates_Estep`
         train_model_Estep = theano.function(inputs=[index, l_r, mom],
-                                        outputs=[cost_Estep, self.dfg.y_pred, self.dfg.z_pred],
+                                        outputs=[cost_Estep, self.dfg.loss_Estep(self.y), self.dfg.y_pred, self.dfg.z_pred],
                                         updates=updates_Estep,
                                         givens=OrderedDict([(self.y, train_set_y[index])]),
                                         mode=mode)
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
         train_model_Mstep = theano.function(inputs=[index, l_r, mom, self.start, self.n_iter],
-                                        outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next],
+                                        outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next] + gparams_Mstep,
                                         updates=updates_Mstep,
                                         givens=OrderedDict([(self.y, train_set_y[index][self.start: self.start + self.n_iter])]),
                                         mode=mode)
@@ -305,45 +322,61 @@ class MetaDFG(BaseEstimator):
         ###############
         logger.info('... training')
         epoch = 0
-        n_iter = self.n_iters[0]
-        self.n_iters = self.n_iters[1:]
+        history_energy = None
+        Estep_on = True
 
         while (epoch < self.n_epochs):
             epoch = epoch + 1
             average_cost = 0.
-            for idx in xrange(n_train):
-                effective_momentum = self.final_momentum \
-                               if epoch > self.momentum_switchover \
-                               else self.initial_momentum
-                example_cost, example_y_pred, example_z_pred = train_model_Estep(idx, self.learning_rate_Estep,
-                                           effective_momentum)
-                average_cost += example_cost
-            logger.info('epoch %d E_step cost=%f' % (epoch, average_cost / n_train))
+            average_energy = 0.
+            effective_momentum = self.final_momentum \
+                        if epoch > self.momentum_switchover \
+                        else self.initial_momentum
+            if Estep_on:
+                for idx in xrange(n_train):
+                    example_cost, example_energy, example_y_pred, example_z_pred = train_model_Estep(idx, self.learning_rate_Estep,
+                                            0.)
+                    average_cost += example_cost
+                    average_energy += example_energy
+                logger.info('epoch %d E_step cost=%f energy=%f' % (epoch,
+                                            average_cost / n_train, average_energy / n_train))
+            if not history_energy or average_energy / n_train < history_energy:
+                history_energy = average_energy / n_train
+            if epoch > 10 and history_energy and average_energy / n_train > history_energy:
+                    Estep_on = False
             average_cost = []
             for idx in xrange(n_train):
-                for head in xrange(0, self.n_step - n_iter):
-                    effective_momentum = self.final_momentum \
-                                if epoch > self.momentum_switchover \
-                                else self.initial_momentum
-
-                    example_cost, example_y_next, example_z_next = train_model_Mstep(idx, self.learning_rate_Mstep,
+                for i in xrange(self.n_step):
+                    n_iter = np.random.randint(low=self.n_iter_low[0],
+                                                high=self.n_iter_high[0])
+                    head = np.random.randint(self.n_step - n_iter)
+                    example_cost, example_y_next, example_z_next, gW_o, gb_o, gW = train_model_Mstep(idx, self.learning_rate_Mstep,
                                                 effective_momentum, head, n_iter)
                     average_cost.append(example_cost)
+                    if np.isnan(example_cost):
+                        date_obj = datetime.datetime.now()
+                        date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
+                        logger.warn('epoch=%d batch=%d head=%d n_iter=%d' % (epoch, i, head, n_iter))
+                        fname = 'debug_%s_%d_%d.json' % (date_str, epoch, i)
+                        fabspath = os.path.join(self.snapshot_path, fname)
+                        self.save(fpath=fabspath)
+                        print gW_o
+                        print gb_o
+                        print gW
+                        exit()
             logger.info('epoch %d M_step n_iter=%d cost=%f' % (epoch, n_iter, np.mean(average_cost)))
             # Update learning rate
             if self.learning_rate_decay_every is not None:
                 if epoch % self.learning_rate_decay_every == 0:
                     self.learning_rate_Estep *= self.learning_rate_decay
                     self.learning_rate_Mstep *= self.learning_rate_decay
-            # Update n_iter
-            if self.n_iter_change_every is not None:
-                if epoch % self.n_iter_change_every == 0:
-                    n_iter = self.n_iters[0]
-                    if len(self.n_iters) > 1:
-                        self.n_iters = self.n_iters[1:]
+            if epoch % self.n_iter_change_every == 0:
+                if len(self.n_iter_low) > 0:
+                    self.n_iter_low = self.n_iter_low[1:]
+                    self.n_iter_high = self.n_iter_high[1:]
             # Snapshot
             if self.snapshot_every is not None:
-                if epoch % self.snapshot_every == 0:
+                if (epoch - 1) % self.snapshot_every == 0:
                     date_obj = datetime.datetime.now()
                     date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
                     class_name = self.__class__.__name__
@@ -367,27 +400,33 @@ class MetaDFG(BaseEstimator):
                         plt.ylim(-5, 5)
                         plt.savefig(self.snapshot_path + fname)
                         plt.close()
+                    fname = '%s.%s-snapshot-%d.pkl' % (class_name, date_str, epoch)
+                    fabspath = os.path.join(self.snapshot_path, fname)
+                    self.save(fpath=fabspath)
 
 
 class sinTestCase(unittest.TestCase):
     def runTest(self):
-        n = 500
+        n = 1500
         x = np.linspace(0, n, n)
         sita = [.2, .331, .42, .51, .74]
+        sita = sita[:3]
         y = np.zeros(n)
         for item in sita:
             y += np.sin(item * x)
         # n_seq x n_t x n_in
-        n_train = 450
-        n_test = 50
+        n_train = n - 500
+        n_test = 500
         y_train = y[:n_train]
         y_test = y[n_train:]
         y_train = y_train.reshape(1, n_train, 1)
         y_test = y_test.reshape(1, n_test, 1)
-        dfg = MetaDFG(n_hidden=5, n_obsv=1, n_step=n_train, order=25, learning_rate_Estep=0.01, learning_rate_Mstep=0.01,
-                n_epochs=1000, snapshot_every=10, L1_reg=0.01, L2_reg=0.01, smooth_reg=0.01,
-                learning_rate_decay=.1, learning_rate_decay_every=500,
-                n_iters=[2, 3, 5, 10, 20], n_iter_change_every=30)
+        dfg = MetaDFG(n_hidden=3, n_obsv=1, n_step=n_train, order=25, learning_rate_Estep=0.01, learning_rate_Mstep=0.001,
+                n_epochs=1000, snapshot_every=1, L1_reg=0.01, L2_reg=0.01, smooth_reg=0.01,
+                learning_rate_decay=.9, learning_rate_decay_every=50,
+                n_iter_low=[20, 20, 20, 20] , n_iter_high=[31, 51, 71, 101], n_iter_change_every=15,
+                final_momentum=0.9,
+                initial_momentum=0.5, momentum_switchover=500)
         dfg.fit(y_train, y_test)
         assert True
 
