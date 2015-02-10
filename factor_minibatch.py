@@ -51,6 +51,7 @@ class Factor(object):
 
 class FIR(Factor):
     def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter, batch_start, batch_stop):
+        logger.info('A FIR factor built ...')
         Factor.__init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter)
         W_bound = order
         W_init = np.asarray(np.random.uniform(size=(order*n_hidden, n_hidden),
@@ -74,19 +75,43 @@ class FIR(Factor):
         [self.z_pred, self.y_pred], _ = theano.scan(step,
                                     sequences=[ dict(input=self.z, taps=range(-order, 0)) ])
 
-
-#        def onestep(z_tm1, z_tm0):
-#            z_t = T.sum(z_tm1 * self.W, axis=0)
-#            y_t = T.dot(z_t, self.W_o) + self.b_o
-#            return z_t, y_t
-#        # implement a hmm version, thus order == 1
-#        [self.z_pred, self.y_pred], _ = theano.scan(onestep,
-#                                    sequences=[ dict(input=self.z, taps=[-1, -0]) ])
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
         [self.z_next, self.y_next], _ = theano.scan(step,
                                     n_steps=self.n_iter,
                                     outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)) , None ])
-                                    #outputs_info = [ dict(initial=self.z[self.start:self.start+order,batch_start:batch_stop,:], taps=range(-order, 0)) , None ])
+class MLP(Factor):
+    def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter, batch_start, batch_stop):
+        logger.info('A MLP factor built ...')
+        Factor.__init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter)
+        W_bound = order
+        W_init = np.asarray(np.random.uniform(size=(order*n_hidden, n_hidden),
+                                low=-1.0 / W_bound, high=1.0 / W_bound),
+                                dtype=theano.config.floatX)
+        self.W = theano.shared(value=W_init, name="W")
+        b_init = np.zeros((n_hidden,), dtype=theano.config.floatX)
+        self.b = theano.shared(value=b_init, name='b')
+        self.params_Mstep.append(self.W)
+        self.params_Mstep.append(self.b)
+        self.L1 += abs(self.W).sum()
+        self.L2_sqr += (self.W ** 2).sum()
+
+        def step(*args):
+            """
+                z_tmp, ..., z_tm1 \in R^{batch_size, n_hidden}
+            """
+            z_concatenate = T.concatenate(args, axis=1) # (batch_size, n_hidden x order)
+            z_t = T.nnet.sigmoid(T.dot(z_concatenate, self.W) + self.b)
+            y_t = T.nnet.sigmoid(T.dot(z_t, self.W_o) + self.b_o)
+            return z_t, y_t
+
+        # z_pred, y_pred for E_step
+        [self.z_pred, self.y_pred], _ = theano.scan(step,
+                                    sequences=[ dict(input=self.z, taps=range(-order, 0)) ])
+
+        self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
+        [self.z_next, self.y_next], _ = theano.scan(step,
+                                    n_steps=self.n_iter,
+                                    outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)) , None ])
 if __name__ == "__main__":
     pass
 

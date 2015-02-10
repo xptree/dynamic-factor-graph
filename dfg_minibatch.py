@@ -40,7 +40,7 @@ class DFG(object):
     softmax: single softmax out, use cross-entropy error
     """
     def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
-                factor_type='FIR'):
+                factor_type='FIR', output_type='real'):
         self.n_hidden = n_hidden
         self.n_obsv = n_obsv
         self.n_step = n_step
@@ -61,8 +61,14 @@ class DFG(object):
                                         n_obsv=self.n_obsv, n_step=self.n_step,
                                         order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
                                         batch_start=self.batch_start, batch_stop=self.batch_stop)
+        elif self.factor_type == 'MLP':
+            self.factor = factor_minibatch.MLP(n_hidden=self.n_hidden,
+                                        n_obsv=self.n_obsv, n_step=self.n_step,
+                                        order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
+                                        batch_start=self.batch_start, batch_stop=self.batch_stop)
         else:
             raise NotImplementedError
+        self.output_type = output_type
 
         self.params_Estep = self.factor.params_Estep
         self.params_Mstep = self.factor.params_Mstep
@@ -87,10 +93,17 @@ class DFG(object):
             self.updates[param] = theano.shared(init)
 
         # Loss = ||Z*(t)-Z(t)||^2 + ||Y*(t) - Y(t)||^2
-        self.z_std = self.z[self.start + self.order: self.start + self.order + self.n_iter]
-        self.loss_Estep = lambda y : (self.se(self.y_pred, y) + self.se(self.z_pred, self.z[self.order:])) / n_seq
-        self.loss_Mstep = lambda y : (self.se(self.y_next, y) + self.se(self.z_next, self.z_std)) / self.effective_batch_size
-        self.test_loss = lambda y : self.se(self.y_next, y) / self.effective_batch_size
+        self.z_std = self.z[self.start+self.order:self.start+self.order+self.n_iter,self.batch_start:self.batch_stop]
+        if self.output_type == 'real':
+            self.loss_Estep = lambda y : (self.se(self.y_pred, y) + self.se(self.z_pred, self.z[self.order:])) / n_seq
+            self.loss_Mstep = lambda y : (self.se(self.y_next, y) + self.se(self.z_next, self.z_std)) / self.effective_batch_size
+            self.test_loss = lambda y : self.se(self.y_next, y) / self.effective_batch_size
+        elif self.output_type == 'binary':
+            self.loss_Estep = lambda y : (self.nll_binary(self.y_pred, y) + self.se(self.z_pred, self.z[self.order:])) / n_seq
+            self.loss_Mstep = lambda y : (self.nll_binary(self.y_next, y) + self.se(self.z_next, self.z_std)) / self.effective_batch_size
+            self.test_loss = lambda y : self.nll_binary(self.y_next, y) / self.effective_batch_size
+        else:
+            raise NotImplementedError
 
         # Smooth Term ||Z(t+1)-Z(t)||^2
         # Estep
@@ -117,13 +130,27 @@ class DFG(object):
     def nmse(self, y_1, y_2):
         # treat y_1 as the approximation to y_2
         return self.mse(y_1, y_2) / self.mse(y_2, 0)
+    def nll_binary(self, y_1, y_2):
+        return T.sum(T.nnet.binary_crossentropy(y_1, y_2))
 
+    def prec(self, y):
+        y_out = T.round(self.y_pred)
+        y_std = T.round(y)
+        true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
+        false_pos = T.sum(T.neq(y_std, 1) * T.eq(y_out, 1))
+        return true_pos / (true_pos + false_pos)
+    def rec(self, y):
+        y_out = T.round(self.y_pred)
+        y_std = T.round(y)
+        true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
+        false_neg = T.sum(T.eq(y_std, 1) * T.neq(y_out, 1))
+        return true_pos / (true_pos + false_neg)
 
 class MetaDFG(BaseEstimator):
     def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, learning_rate_Estep=0.1, learning_rate_Mstep=0.1,
                 n_epochs=100, batch_size=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=1, learning_rate_decay_every=100,
-                factor_type='FIR', activation='tanh', final_momentum=0.9,
+                factor_type='FIR', output_type='real', activation='tanh', final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=5,
                 n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
                 snapshot_every=None, snapshot_path='tmp/'):
@@ -142,6 +169,7 @@ class MetaDFG(BaseEstimator):
         self.L2_reg = float(L2_reg)
         self.smooth_reg = float(smooth_reg)
         self.factor_type = factor_type
+        self.output_type = output_type
         self.activation = activation
         self.initial_momentum = float(initial_momentum)
         self.final_momentum = float(final_momentum)
@@ -179,7 +207,8 @@ class MetaDFG(BaseEstimator):
         self.dfg = DFG(n_hidden=self.n_hidden,
                         n_obsv=self.n_obsv, n_step=self.n_step,
                         order=self.order, n_seq=self.n_seq, start=self.start,
-                        n_iter=self.n_iter, factor_type=self.factor_type)
+                        n_iter=self.n_iter, factor_type=self.factor_type,
+                        output_type=self.output_type)
 
     def shared_dataset(self, data):
         """ Load the dataset into shared variables """
@@ -295,7 +324,7 @@ class MetaDFG(BaseEstimator):
                                             outputs=effective_batch_size)
 
         compute_train_error_Estep = theano.function(inputs=[],
-                                                outputs=self.dfg.loss_Estep(self.y),
+                                                outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred],
                                                 givens=OrderedDict([(self.y, train_set_y)]),
                                                 mode=mode)
 
@@ -349,7 +378,7 @@ class MetaDFG(BaseEstimator):
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
         train_model_Mstep = theano.function(inputs=[index, n_ex, l_r, mom, self.start, self.n_iter, batch_size],
-                                        outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next] + gparams_Mstep,
+                                        outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next],
                                         updates=updates_Mstep,
                                         givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
                                         mode=mode)
@@ -373,14 +402,16 @@ class MetaDFG(BaseEstimator):
                     n_iter = np.random.randint(low=self.n_iter_low[0],
                                                 high=self.n_iter_high[0])
                     head = np.random.randint(self.n_step - n_iter)
-                    example_cost, example_y_next, example_z_next, gW_o, gb_o, gW = train_model_Mstep(minibatch_idx, n_train, self.learning_rate_Mstep,
+                    example_cost, example_y_next, example_z_next = train_model_Mstep(minibatch_idx, n_train, self.learning_rate_Mstep,
                                                 effective_momentum, head, n_iter, self.batch_size)
                     average_cost.append(example_cost)
                 logger.info('epoch %d batch %d M_step cost=%f' % (epoch, minibatch_idx, np.mean(average_cost)))
                 iters = (epoch - 1) * n_train_batches + minibatch_idx + 1
                 if iters % validation_frequency == 0:
                     # Computer loss on training set (conside Estep loss only)
-                    train_loss_Estep = compute_train_error_Estep()
+                    train_loss_Estep, y_pred = compute_train_error_Estep()
+                    print np.max(y_pred), np.sum(y_pred), np.sum(np.round(y_pred))
+                    prec, rec = 0, 0
                     if self.interactive:
                         test_losses = [compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)[0]
                                         for i in xrange(n_test_batches)]
@@ -388,20 +419,21 @@ class MetaDFG(BaseEstimator):
                                             for i in xrange(n_test_batches)]
                         this_test_loss = np.average(test_losses,
                                                     weights=test_batch_sizes)
-                        logger.info('epoch %d, batch %d/%d, tr_loss %f, te_loss %f' % \
-                                    (epoch, minibatch_idx + 1, n_train_batches, train_loss_Estep, this_test_loss))
+                        logger.info('epoch %d, batch %d/%d, tr_loss %f tr_prec %f tr_rec %f, te_loss %f' % \
+                                    (epoch, minibatch_idx + 1, n_train_batches, train_loss_Estep, prec, rec, this_test_loss))
                     else:
-                        logger.info('epoch %d, batch %d/%d, tr_loss %f' % \
-                                    (epoch, minibatch_idx + 1, n_train_batches, train_loss_Estep))
+                        logger.info('epoch %d, batch %d/%d, tr_loss %f tr_prec %f tr_rec %f' % \
+                                    (epoch, minibatch_idx + 1, n_train_batches, train_loss_Estep, prec, rec))
             # Update learning rate
             if self.learning_rate_decay_every is not None:
                 if epoch % self.learning_rate_decay_every == 0:
                     self.learning_rate_Estep *= self.learning_rate_decay
                     self.learning_rate_Mstep *= self.learning_rate_decay
             if epoch % self.n_iter_change_every == 0:
-                if len(self.n_iter_low) > 0:
+                if len(self.n_iter_low) > 1:
                     self.n_iter_low = self.n_iter_low[1:]
                     self.n_iter_high = self.n_iter_high[1:]
+            '''
             # Snapshot
             if self.snapshot_every is not None:
                 if (epoch - 1) % self.snapshot_every == 0:
@@ -438,7 +470,7 @@ class MetaDFG(BaseEstimator):
                     fname = '%s.%s-snapshot-%d.pkl' % (class_name, date_str, epoch + 1)
                     fabspath = os.path.join(self.snapshot_path, fname)
                     self.save(fpath=fabspath)
-            '''
+'''
 class sinTestCase(unittest.TestCase):
     def runTest(self):
         n = 2500
@@ -463,6 +495,23 @@ class sinTestCase(unittest.TestCase):
                 initial_momentum=0.5, momentum_switchover=500)
         dfg.fit(y_train, y_test, validation_frequency=1)
         assert True
+'''
+class xtxTestCase(unittest.TestCase):
+    def runTest(self):
+        DATA_DIR = 'data/fin2.pkl'
+        with open(DATA_DIR, 'rb') as file:
+            data = pickle.load(file)
+        data = data[:,:500,:]
+        print np.sum(data[-1,:,-1])
+        n_step, n_seq, n_obsv = data.shape
+        dfg = MetaDFG(n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+                factor_type='MLP', output_type='binary',
+                n_epochs=1000, batch_size=250, snapshot_every=1, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                learning_rate_decay=.9, learning_rate_decay_every=50,
+                n_iter_low=[1] , n_iter_high=[n_step], n_iter_change_every=15,
+                final_momentum=0.9,
+                initial_momentum=0.5, momentum_switchover=500)
+        dfg.fit(data, None, validation_frequency=1)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
