@@ -15,13 +15,14 @@ from xlrd import open_workbook
 import numpy as np
 
 logger = logging.getLogger(__name__)
-RAW_GRADE_DIR = "../../RawData/grades/"
-GRADE_DIR = "../Excel.json"
-FORUM_DIR = "../Forum.json"
-COURSE_INFO_DIR = "../CourseInfo.json"
-BEHAVIOR_DIR = "../LearningBehavior.json"
-LEARNING_TIME_DIR = '../Trackinglog.json'
-MONGO_DIR = '../MongoDB.json'
+DEV_PATH = "../../xtx/dev/"
+RAW_GRADE_DIR = DEV_PATH + "RawData/grades/"
+GRADE_DIR = DEV_PATH + "Data/Excel.json"
+FORUM_DIR = DEV_PATH + "Data/Forum.json"
+COURSE_INFO_DIR = DEV_PATH + "Data/CourseInfo.json"
+BEHAVIOR_DIR = DEV_PATH + "Data/LearningBehavior.json"
+LEARNING_TIME_DIR = DEV_PATH + 'Data/Trackinglog.json'
+MONGO_DIR = DEV_PATH + 'Data/MongoDB.json'
 EPS = 1e-3
 
 class mkdata(object):
@@ -311,8 +312,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     fin2 = Finance2014()
     fin2.generate()
-    fin2.save('fin2.json')
-    fin2.save_dataset('fin2.pkl')
+#    fin2.save('data/fin2.json')
+    fin2.save_dataset('data/fin2.pkl')
 #    combin = Combin()
 #    combin.generate()
 #    combin.save('combin.pkl')
