@@ -36,6 +36,7 @@ class Factor(object):
         #z0_init = np.zeros(size=(order, n_hidden), dtype=theano.config.floatX)
         #self.z0 = theano.shared(value=z0_init, name='z0')
         z_bound = n_hidden
+        z_bound = 1
         z_init = np.asarray(np.random.uniform(size=(n_step + order, n_seq, n_hidden),
                                 low=-1.0 / z_bound, high=1.0 / z_bound),
                                 dtype=theano.config.floatX)

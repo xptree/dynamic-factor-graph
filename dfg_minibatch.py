@@ -138,13 +138,13 @@ class DFG(object):
         y_std = T.round(y)
         true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
         false_pos = T.sum(T.neq(y_std, 1) * T.eq(y_out, 1))
-        return true_pos / (true_pos + false_pos)
+        return (true_pos + 0.) / (true_pos + false_pos)
     def rec(self, y):
         y_out = T.round(self.y_pred)
         y_std = T.round(y)
         true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
         false_neg = T.sum(T.eq(y_std, 1) * T.neq(y_out, 1))
-        return true_pos / (true_pos + false_neg)
+        return (true_pos + 0.) / (true_pos + false_neg)
 
 class MetaDFG(BaseEstimator):
     def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, learning_rate_Estep=0.1, learning_rate_Mstep=0.1,
@@ -324,7 +324,8 @@ class MetaDFG(BaseEstimator):
                                             outputs=effective_batch_size)
 
         compute_train_error_Estep = theano.function(inputs=[],
-                                                outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred],
+                                                outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred,
+                                                            self.dfg.prec(self.y), self.dfg.rec(self.y)],
                                                 givens=OrderedDict([(self.y, train_set_y)]),
                                                 mode=mode)
 
@@ -409,9 +410,8 @@ class MetaDFG(BaseEstimator):
                 iters = (epoch - 1) * n_train_batches + minibatch_idx + 1
                 if iters % validation_frequency == 0:
                     # Computer loss on training set (conside Estep loss only)
-                    train_loss_Estep, y_pred = compute_train_error_Estep()
-                    print np.max(y_pred), np.sum(y_pred), np.sum(np.round(y_pred))
-                    prec, rec = 0, 0
+                    train_loss_Estep, y_pred, prec, rec = compute_train_error_Estep()
+                    print np.max(y_pred), np.min(y_pred)
                     if self.interactive:
                         test_losses = [compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)[0]
                                         for i in xrange(n_test_batches)]
@@ -468,6 +468,7 @@ class MetaDFG(BaseEstimator):
                     date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
                     class_name = self.__class__.__name__
                     fname = '%s.%s-snapshot-%d.pkl' % (class_name, date_str, epoch + 1)
+                    fname = '%s.%s-snapshot-%d.json' % (class_name, date_str, epoch + 1)
                     fabspath = os.path.join(self.snapshot_path, fname)
                     self.save(fpath=fabspath)
 '''
@@ -501,12 +502,12 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             data = pickle.load(file)
-        data = data[:,:500,:]
+        data = data[:,:600,:]
         print np.sum(data[-1,:,-1])
         n_step, n_seq, n_obsv = data.shape
         dfg = MetaDFG(n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=1000, batch_size=250, snapshot_every=1, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                n_epochs=1000, batch_size=200, snapshot_every=1, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=.9, learning_rate_decay_every=50,
                 n_iter_low=[1] , n_iter_high=[n_step], n_iter_change_every=15,
                 final_momentum=0.9,

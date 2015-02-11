@@ -94,7 +94,8 @@ class mkdata(object):
                 self.feature[uid][single_date][1] += item[2]
     def getBehaviorData(self):
         # video problem other
-        self.expand_feature(3)
+        #self.expand_feature(3)
+        self.expand_feature(2)
         with open(BEHAVIOR_DIR) as f:
             behavior = json.load(f)
         for uid in behavior:
@@ -111,8 +112,8 @@ class mkdata(object):
                             self.feature[uid][single_date][0] += 1
                         elif catagory == 'problem':
                             self.feature[uid][single_date][1] += 1
-                        else:
-                            self.feature[uid][single_date][2] += 1
+#                        else:
+#                            self.feature[uid][single_date][2] += 1
     def save(self, fpath='.', fname=None):
         """save a json or pickle representation of data set"""
         fpathstart, fpathext = os.path.splitext(fpath)
@@ -153,7 +154,7 @@ class mkdata(object):
                 assert len(self.feature[uid][T]) == self.feature_num
                 for i in xrange(self.feature_num):
                     dataset[T][index][i] = self.feature[uid][T][i]
-        with open('fabspath', 'wb') as file:
+        with open(fabspath, 'wb') as file:
             pickle.dump(dataset, file, protocol=pickle.HIGHEST_PROTOCOL)
     def getDDL(self):
         self.ddls = []
@@ -300,7 +301,7 @@ class Finance2014(mkdata):
         self.__get_score__(scoreColumn, fname)
 
     def generate(self):
-        self.getForumData()
+#        self.getForumData()
         self.getBehaviorData()
         self.getLearningData()
         self.getDDL()
