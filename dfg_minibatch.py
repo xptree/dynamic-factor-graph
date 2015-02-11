@@ -39,8 +39,11 @@ class DFG(object):
     binary: binary output units, use cross-entropy error
     softmax: single softmax out, use cross-entropy error
     """
-    def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
+    def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
                 factor_type='FIR', output_type='real'):
+        self.n_in = n_in
+        self.x = x
+        self.y_tm1 = y_tm1
         self.n_hidden = n_hidden
         self.n_obsv = n_obsv
         self.n_step = n_step
@@ -57,12 +60,17 @@ class DFG(object):
         self.batch_stop = T.minimum(self.n_ex, (self.index + 1) * self.batch_size)
         self.effective_batch_size = self.batch_stop - self.batch_start
         if self.factor_type == 'FIR':
+            # FIR factor with n_in > 0 is not implemented
+            if self.n_in > 0:
+                raise NotImplementedError
             self.factor = factor_minibatch.FIR(n_hidden=self.n_hidden,
                                         n_obsv=self.n_obsv, n_step=self.n_step,
                                         order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
                                         batch_start=self.batch_start, batch_stop=self.batch_stop)
         elif self.factor_type == 'MLP':
-            self.factor = factor_minibatch.MLP(n_hidden=self.n_hidden,
+            self.factor = factor_minibatch.MLP(n_in=self.n_in,
+                                        x=self.x, y_tm1=self.y_tm1,
+                                        n_hidden=self.n_hidden,
                                         n_obsv=self.n_obsv, n_step=self.n_step,
                                         order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
                                         batch_start=self.batch_start, batch_stop=self.batch_stop)
@@ -147,13 +155,14 @@ class DFG(object):
         return (true_pos + 0.) / (true_pos + false_neg)
 
 class MetaDFG(BaseEstimator):
-    def __init__(self, n_hidden, n_obsv, n_step, order, n_seq, learning_rate_Estep=0.1, learning_rate_Mstep=0.1,
+    def __init__(self, n_in, n_hidden, n_obsv, n_step, order, n_seq, learning_rate_Estep=0.1, learning_rate_Mstep=0.1,
                 n_epochs=100, batch_size=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=1, learning_rate_decay_every=100,
                 factor_type='FIR', output_type='real', activation='tanh', final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=5,
                 n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
                 snapshot_every=None, snapshot_path='tmp/'):
+        self.n_int = int(n_in)
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
         self.n_step = int(n_step)
@@ -188,6 +197,8 @@ class MetaDFG(BaseEstimator):
     def ready(self):
         # observation (where first dimension is time)
         self.y = T.tensor3(name='y', dtype=theano.config.floatX)
+        self.y_tm1 = T.tensor3(name='y_tm1', dtype=theano.config.floatX)
+        self.x = T.tensor3(name='x', dtype=theano.config.floatX)
 
         # learning rate
         self.lr = T.scalar()
@@ -204,7 +215,7 @@ class MetaDFG(BaseEstimator):
         else:
             raise NotImplementedError
 
-        self.dfg = DFG(n_hidden=self.n_hidden,
+        self.dfg = DFG(n_in=self.n_in, x=self.x, y_tm1=self.y_tm1, n_hidden=self.n_hidden,
                         n_obsv=self.n_obsv, n_step=self.n_step,
                         order=self.order, n_seq=self.n_seq, start=self.start,
                         n_iter=self.n_iter, factor_type=self.factor_type,
@@ -272,7 +283,8 @@ class MetaDFG(BaseEstimator):
             state = pickle.load(file)
             self.__setstete__(state)
 
-    def fit(self, Y_train, Y_test=None,
+    def fit(self, Y_train=None, Y_test=None,
+            X_train=None,
             validation_frequency=100):
         """Fit model
 
