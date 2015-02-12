@@ -24,9 +24,9 @@ import matplotlib.pylab as plt
 
 logger = logging.getLogger(__name__)
 theano.config.exception_verbosity='high'
-#mode = theano.Mode(linker='cvm')
+mode = theano.Mode(linker='cvm')
 #mode = 'DebugMode'
-mode = 'FAST_COMPILE'
+#mode = 'FAST_COMPILE'
 #mode = theano.Mode(optimizer=None)
 #mode = 'ProfileMode'
 DEBUG = True
@@ -162,7 +162,7 @@ class MetaDFG(BaseEstimator):
                 initial_momentum=0.5, momentum_switchover=5,
                 n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
                 snapshot_every=None, snapshot_path='tmp/'):
-        self.n_int = int(n_in)
+        self.n_in = int(n_in)
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
         self.n_step = int(n_step)
@@ -284,14 +284,15 @@ class MetaDFG(BaseEstimator):
             self.__setstete__(state)
 
     def fit(self, Y_train=None, Y_test=None,
-            X_train=None,
+            X_train=None, X_test=None,
             validation_frequency=100):
         """Fit model
 
         Pass in Y_test to compute test error and report during training
             Y_train : ndarray (n_step, n_seq, n_out)
-            Y_test  : ndarray (n_seq, n_seq, n_out)
-
+            Y_test  : ndarray (T, n_seq, n_out)
+            X_train : ndarray (n_step, n_seq, n_in)
+            X_test  : ndarray (T, n_seq, n_in)
         validation_frequency : int
             in terms of number of epoch
         """
@@ -300,9 +301,15 @@ class MetaDFG(BaseEstimator):
         if Y_test is not None:
             self.interactive = True
             test_set_y = self.shared_dataset(Y_test)
+            test_set_x = self.shared_dataset(X_test)
         else:
             self.interactive = False
+
+        train_set_x = self.shared_dataset(X_train)
+        Y_train_tm1 = np.zeros_like(Y_train)
+        Y_train_tm1[1:,:,:]=Y_train[:-1,:,:]
         train_set_y = self.shared_dataset(Y_train)
+        train_set_y_tm1 = self.shared_dataset(Y_train_tm1)
         n_train = train_set_y.get_value(borrow=True).shape[1]
         n_train_batches = int(np.ceil(float(n_train) / self.batch_size))
         if self.interactive:
@@ -338,17 +345,23 @@ class MetaDFG(BaseEstimator):
         compute_train_error_Estep = theano.function(inputs=[],
                                                 outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred,
                                                             self.dfg.prec(self.y), self.dfg.rec(self.y)],
-                                                givens=OrderedDict([(self.y, train_set_y)]),
+                                                givens=OrderedDict([(self.y, train_set_y),
+                                                                    (self.y_tm1, train_set_y_tm1),
+                                                                    (self.x, train_set_x)]),
                                                 mode=mode)
 
         compute_train_error_Mstep = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
                                         outputs=self.dfg.loss_Mstep(self.y),
-                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
+                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
+                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
                                         mode=mode)
         if self.interactive:
             compute_test_error = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
                                                     outputs=[self.dfg.test_loss(self.y), self.dfg.y_next],
-                                                    givens=OrderedDict([(self.y, test_set_y[:, batch_start:batch_stop])]),
+                                                    givens=OrderedDict([(self.y, test_set_y[:, batch_start:batch_stop]),
+                                                                        (self.y_tm1, train_set_y[-1:, batch_start:batch_stop]),
+                                                                        (self.x, test_set_x[:,batch_start:batch_stop])]),
                                                     mode=mode)
 
 
@@ -386,14 +399,18 @@ class MetaDFG(BaseEstimator):
         train_model_Estep = theano.function(inputs=[l_r, mom],
                                         outputs=[cost_Estep, self.dfg.loss_Estep(self.y), self.dfg.y_pred, self.dfg.z_pred],
                                         updates=updates_Estep,
-                                        givens=OrderedDict([(self.y, train_set_y)]),
+                                        givens=OrderedDict([(self.y, train_set_y),
+                                                            (self.y_tm1, train_set_y_tm1),
+                                                            (self.x, train_set_x)]),
                                         mode=mode)
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
         train_model_Mstep = theano.function(inputs=[index, n_ex, l_r, mom, self.start, self.n_iter, batch_size],
                                         outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next],
                                         updates=updates_Mstep,
-                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
+                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
+                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
                                         mode=mode)
         ###############
         # TRAIN MODEL #
@@ -514,19 +531,21 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             data = pickle.load(file)
-        data = data[:,:600,:]
+        data = data[:,:2000,:]
         print np.sum(data[-1,:,-1])
         n_step, n_seq, n_obsv = data.shape
-        dfg = MetaDFG(n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        dfg = MetaDFG(n_in=10, n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
                 n_epochs=1000, batch_size=200, snapshot_every=1, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=.9, learning_rate_decay_every=50,
                 n_iter_low=[1] , n_iter_high=[n_step], n_iter_change_every=15,
                 final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=500)
-        dfg.fit(data, None, validation_frequency=1)
+        X_train = np.zeros((n_step, n_seq, 10))
+        dfg.fit(Y_train=data, X_train=X_train, validation_frequency=1)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(message)s') # include timestamp
     unittest.main()
 

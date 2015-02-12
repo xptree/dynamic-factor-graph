@@ -87,7 +87,7 @@ class MLP(Factor):
         Factor.__init__(self, n_in, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter)
         # real value passed through givens=[..]
         self.x = x
-        self.y_tm1 = self.y_tm1
+        self.y_tm1 = y_tm1
         W_n_in = order*n_hidden+n_in+n_obsv
         W_n_out = n_hidden
         W_bound = 4 * np.sqrt(6. / (W_n_in + W_n_out))
@@ -123,7 +123,6 @@ class MLP(Factor):
                                                 dict(input=self.y_tm1, taps=[0]) ])
 
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
-        self.x_subtensor = self.x[self.start:self.start+self.n_iter, batch_start:batch_stop]
 
         # Compute z_next, y_next for either M step or performance evaluation
         # Here x should be n_iter x effective_batch_size x n_in
@@ -132,7 +131,7 @@ class MLP(Factor):
                                     sequences=[ dict(input=self.x, taps=[0]) ],
                                     n_steps=self.n_iter,
                                     outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)),
-                                                        dict(initial=self.y_tm1, taps=[-1]) ])
+                                                        dict(initial=self.y_tm1[-1]) ])
 if __name__ == "__main__":
     pass
 
