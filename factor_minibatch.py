@@ -83,7 +83,7 @@ class FIR(Factor):
                                     outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)) , None ])
 class MLP(Factor):
     def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter, batch_start, batch_stop, no_past_obsv=True):
-        logger.info('A MLP factor built ...')
+        logger.info('A MLP factor with%s past obsv built ...' % ('out' if no_past_obsv else ''))
         Factor.__init__(self, n_in, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter)
         # real value passed through givens=[..]
         self.x = x
@@ -93,17 +93,27 @@ class MLP(Factor):
         else:
             W_n_in = order * n_hidden + n_in + n_obsv
         W_n_out = n_hidden
-        W_bound = 4 * np.sqrt(6. / (W_n_in + W_n_out))
-        W_init = np.asarray(np.random.uniform(size=(W_n_in, W_n_out),
+        W_n_hidden = (W_n_in + W_n_out) * 2 / 3
+        layer_size = [W_n_in, W_n_hidden, W_n_out]
+        self.Ws, self.bs = [], []
+        for i in xrange(len(layer_size) - 1):
+            W_bound = 4 * np.sqrt(6. / (layer_size[i] + layer_size[i+1]))
+            W_init = np.asarray(np.random.uniform(size=(layer_size[i], layer_size[i+1]),
                                 low=-W_bound, high=W_bound),
                                 dtype=theano.config.floatX)
-        self.W = theano.shared(value=W_init, name="W")
-        b_init = np.zeros((n_hidden,), dtype=theano.config.floatX)
-        self.b = theano.shared(value=b_init, name='b')
-        self.params_Mstep.append(self.W)
-        self.params_Mstep.append(self.b)
-        self.L1 += abs(self.W).sum()
-        self.L2_sqr += (self.W ** 2).sum()
+            W = theano.shared(value=W_init, name="W")
+            b_init = np.zeros((layer_size[i+1],), dtype=theano.config.floatX)
+            b = theano.shared(value=b_init, name='b')
+            self.params_Mstep.append(W)
+            self.params_Mstep.append(b)
+            self.L1 += abs(W).sum()
+            self.L2_sqr += (W ** 2).sum()
+            self.Ws.append(W)
+            self.bs.append(b)
+
+        #rng = np.random.RandomState()
+        #self.srng = T.shared_randomstreams.RandomStreams(
+        #                    rng.randint(999999))
 
         def step(*args):
             """
@@ -112,8 +122,13 @@ class MLP(Factor):
                 z_tmp, ..., z_tm1 \in R^{batch_size, n_hidden}
                 y_tm1 \in R^{batch_size, n_obsv}
             """
+            #if no_past_obsv == False:
+            #    args = list(args)
+            #    mask = self.srng.binomial(n=1, p=0.5, size=args[-1].shape)
+            #    args[-1] = args[-1] * T.cast(mask, theano.config.floatX)
             z_concatenate = T.concatenate(args, axis=1) # (batch_size, n_hidden x order + n_in + n_obsv)
-            z_t = T.nnet.sigmoid(T.dot(z_concatenate, self.W) + self.b)
+            hidden = T.nnet.sigmoid(T.dot(z_concatenate, self.Ws[0]) + self.bs[0])
+            z_t = T.nnet.sigmoid(T.dot(hidden, self.Ws[1]) + self.bs[1])
             y_t = T.nnet.sigmoid(T.dot(z_t, self.W_o) + self.b_o)
             return z_t, y_t
 

@@ -3,7 +3,7 @@
 # File Name: mkdata.py
 # Author: Jiezhong Qiu
 # Create Time: 2015/02/09 14:12
-# TODO: generate data for dfg
+# TODO: generate_Y data for dfg
 
 import os
 import json
@@ -13,6 +13,7 @@ import logging
 import pickle
 from xlrd import open_workbook
 import numpy as np
+from sklearn.metrics import precision_recall_fscore_support
 
 logger = logging.getLogger(__name__)
 DEV_PATH = "../../xtx/dev/"
@@ -23,11 +24,12 @@ COURSE_INFO_DIR = DEV_PATH + "Data/CourseInfo.json"
 BEHAVIOR_DIR = DEV_PATH + "Data/LearningBehavior.json"
 LEARNING_TIME_DIR = DEV_PATH + 'Data/Trackinglog.json'
 MONGO_DIR = DEV_PATH + 'Data/MongoDB.json'
+DEMOGRAPHICS_DIR = DEV_PATH + 'Data/Demographics.json'
 EPS = 1e-3
 
 class mkdata(object):
     def __init__(self):
-        '''generate data as the following format
+        '''generate_Y data as the following format
             feature[uid][T] is a list of features for user uid at time T
             the feature shoule be additive
             we remove register-only student from the dataset
@@ -120,7 +122,7 @@ class mkdata(object):
         if fpathext == '.json' or fpathext == '.pkl':
             fpath, fname = os.path.split(fpath)
         elif fname is None:
-            # Generate filename based on date
+            # generate_Y filename based on date
             date_obj = datetime.datetime.now()
             date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
             class_name = self.__class__.__name__
@@ -139,7 +141,7 @@ class mkdata(object):
         if fpathext == '.pkl':
             fpath, fname = os.path.split(fpath)
         elif fname is None:
-            # Generate filename based on date
+            # generate_Y filename based on date
             date_obj = datetime.datetime.now()
             date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
             class_name = self.__class__.__name__
@@ -147,15 +149,27 @@ class mkdata(object):
         fabspath = os.path.join(fpath, fname)
         logger.info('Saving dataset to %s shape=(%d, %d, %d)...' % (fabspath, len(self.ddls)+1, len(self.feature), self.feature_num))
         # n_step x n_seq x n_obsv
-        dataset = np.zeros(shape=(len(self.ddls)+1, len(self.feature), self.feature_num))
+        n_step = len(self.ddls) + 1
+        n_seq = len(self.feature)
+        dataset = np.zeros(shape=(n_step, n_seq, self.feature_num))
         for index, uid in enumerate(self.feature):
             assert len(self.feature[uid]) == len(self.ddls) + 1
             for T in xrange(len(self.feature[uid])):
                 assert len(self.feature[uid][T]) == self.feature_num
                 for i in xrange(self.feature_num):
                     dataset[T][index][i] = self.feature[uid][T][i]
+        X = np.zeros(shape=(n_step, n_seq, self.n_in))
+        for index, uid in enumerate(self.feature):
+            for T in xrange(len(self.X[uid])):
+                if len(self.X[uid][T]) != self.n_in:
+                    print len(self.X[uid][T]), self.n_in
+                assert len(self.X[uid][T]) == self.n_in
+                for i in xrange(self.n_in):
+                    X[T][index][i] = self.X[uid][T][i]
+
         with open(fabspath, 'wb') as file:
-            pickle.dump(dataset, file, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump((dataset, X), file, protocol=pickle.HIGHEST_PROTOCOL)
+        self.dataset = dataset
     def getDDL(self):
         self.ddls = []
         with open(MONGO_DIR) as f:
@@ -208,14 +222,48 @@ class mkdata(object):
                     door += EPS
                 for uid in self.feature:
                     self.feature[uid][T][i] = 1 if self.feature[uid][T][i] > door else 0
+    def getDemographics(self):
+        # binary feature
+        # male, female, el, jhs, hs, c, b, m, p, [0,18], [18,23], [23, 28], [28, 36], [36, 51], [> 51]
+        with open(DEMOGRAPHICS_DIR) as f:
+            demos = json.load(f)
+        self.n_in = 15
+        for uid in self.feature:
+            tmp = []
+            demo = demos[uid]
+            for task in ['m', 'f']:
+                tmp.append(1 if demo['gender'] == task else 0)
+            for task in ['el', 'jhs', 'hs', 'c', 'b', 'm', 'p']:
+                tmp.append(1 if demo['education'] == task else 0)
+            if demo['age'] is not None:
+                age = 2014 - demo['age']
+                task = [0, 18, 23, 28, 36, 51, 1000]
+                for i in xrange(len(task)-1):
+                    tmp.append(1 if age >= task[i] and age < task[i+1] else 0)
+            else:
+                tmp += [0.] * 6
+            for T in xrange(len(self.ddls)+1):
+                self.X[uid][T] += tmp
 
-    def generate(self):
+    def generate_Y(self):
         self.getForumData() #5
         self.getBehaviorData() #3
         self.getLearningData() #2
         self.getDDL()
         self.getStageFeature()
 
+    def generate_X(self):
+        self.X = {}
+        for uid in self.feature:
+            self.X[uid] = [[] for i in xrange(len(self.ddls)+1)]
+        # Demographics Feature
+        self.getDemographics()
+        print self.X['95792']
+        # Course Release Feature
+        # Forum related Feature
+    def base_line(self):
+        for i in xrange(len(self.ddls) + 1):
+            print precision_recall_fscore_support(self.dataset[-1,:,-1], self.dataset[i,:,-1], average='micro')
     def __get_score__(self, scoreColumn, fname):
         book = open_workbook(RAW_GRADE_DIR + fname)
         sheet = book.sheet_by_index(0)
@@ -300,7 +348,7 @@ class Finance2014(mkdata):
         fname = 'grades_TsinghuaX-80512073_2014_1X-_.xlsx'
         self.__get_score__(scoreColumn, fname)
 
-    def generate(self):
+    def generate_Y(self):
 #        self.getForumData()
         self.getBehaviorData()
         self.getLearningData()
@@ -312,14 +360,16 @@ class Finance2014(mkdata):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     fin2 = Finance2014()
-    fin2.generate()
+    fin2.generate_Y()
+    fin2.generate_X()
 #    fin2.save('data/fin2.json')
     fin2.save_dataset('data/fin2.pkl')
+    fin2.base_line()
 #    combin = Combin()
-#    combin.generate()
+#    combin.generate_Y()
 #    combin.save('combin.pkl')
 #    circuit = Circuit()
-#    circuit.generate()
+#    circuit.generate_Y()
 #    circuit.save('circuit.json')
 
 

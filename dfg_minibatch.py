@@ -557,23 +557,27 @@ class xtxTestCase(unittest.TestCase):
     def runTest(self):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
-            data = pickle.load(file)
-        data = data[:,:2000,:]
-        Y_train = data[:-7]
-        Y_test = data[-7:]
-        n_in = 10
+            Y, X = pickle.load(file)
+        #data = data[:,:2000,:]
+        T = -1
+        Y_train = Y[:T]
+        Y_test = Y[T:]
+        X_train = X[:T]
+        X_test = X[T:]
+        n_in = X_train.shape[2]
         #print np.sum(data[-1,:,-1])
         n_step, n_seq, n_obsv = Y_train.shape
+        logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
         dfg = MetaDFG(n_in=n_in, n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=2000, batch_size=n_seq / 2 + 1, snapshot_every=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
-                learning_rate_decay=.9, learning_rate_decay_every=500,
-                n_iter_low=[1, 1] , n_iter_high=[n_step / 2, n_step + 1], n_iter_change_every=2000,
+                n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                learning_rate_decay=.5, learning_rate_decay_every=100,
+                n_iter_low=[3] , n_iter_high=[n_step + 1], n_iter_change_every=100,
                 final_momentum=0.5,
                 initial_momentum=0.3, momentum_switchover=1500,
                 no_past_obsv=True)
-        X_train = np.zeros((n_step, n_seq, n_in))
-        X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
+        #X_train = np.zeros((n_step, n_seq, n_in))
+        #X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
         dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=10)
 
 if __name__ == "__main__":
