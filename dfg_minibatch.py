@@ -40,7 +40,8 @@ class DFG(object):
     softmax: single softmax out, use cross-entropy error
     """
     def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
-                factor_type='FIR', output_type='real'):
+                factor_type='FIR', output_type='real',
+                no_past_obsv=True):
         self.n_in = n_in
         self.x = x
         self.y_tm1 = y_tm1
@@ -59,6 +60,7 @@ class DFG(object):
         self.batch_start = self.index * self.batch_size
         self.batch_stop = T.minimum(self.n_ex, (self.index + 1) * self.batch_size)
         self.effective_batch_size = self.batch_stop - self.batch_start
+        self.no_past_obsv = no_past_obsv
         if self.factor_type == 'FIR':
             # FIR factor with n_in > 0 is not implemented
             if self.n_in > 0:
@@ -73,7 +75,8 @@ class DFG(object):
                                         n_hidden=self.n_hidden,
                                         n_obsv=self.n_obsv, n_step=self.n_step,
                                         order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
-                                        batch_start=self.batch_start, batch_stop=self.batch_stop)
+                                        batch_start=self.batch_start, batch_stop=self.batch_stop,
+                                        no_past_obsv=self.no_past_obsv)
         else:
             raise NotImplementedError
         self.output_type = output_type
@@ -161,7 +164,8 @@ class MetaDFG(BaseEstimator):
                 factor_type='FIR', output_type='real', activation='tanh', final_momentum=0.9,
                 initial_momentum=0.5, momentum_switchover=5,
                 n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
-                snapshot_every=None, snapshot_path='tmp/'):
+                snapshot_every=None, snapshot_path='tmp/',
+                no_past_obsv=True):
         self.n_in = int(n_in)
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
@@ -192,6 +196,7 @@ class MetaDFG(BaseEstimator):
         else:
             self.snapshot_every = None
         self.snapshot_path = snapshot_path
+        self.no_past_obsv = no_past_obsv
         self.ready()
 
     def ready(self):
@@ -219,7 +224,8 @@ class MetaDFG(BaseEstimator):
                         n_obsv=self.n_obsv, n_step=self.n_step,
                         order=self.order, n_seq=self.n_seq, start=self.start,
                         n_iter=self.n_iter, factor_type=self.factor_type,
-                        output_type=self.output_type)
+                        output_type=self.output_type,
+                        no_past_obsv=self.no_past_obsv)
 
     def shared_dataset(self, data):
         """ Load the dataset into shared variables """
@@ -342,26 +348,32 @@ class MetaDFG(BaseEstimator):
         get_batch_size = theano.function(inputs=[index, n_ex, batch_size],
                                             outputs=effective_batch_size)
 
+        givens=[(self.y, train_set_y),
+                (self.x, train_set_x),
+                (self.y_tm1, train_set_y_tm1)]
+        if self.no_past_obsv:
+            givens = givens[:-1]
         compute_train_error_Estep = theano.function(inputs=[],
                                                 outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred,
                                                             self.dfg.prec(self.y), self.dfg.rec(self.y)],
-                                                givens=OrderedDict([(self.y, train_set_y),
-                                                                    (self.y_tm1, train_set_y_tm1),
-                                                                    (self.x, train_set_x)]),
+                                                givens=OrderedDict(givens),
                                                 mode=mode)
 
-        compute_train_error_Mstep = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
-                                        outputs=self.dfg.loss_Mstep(self.y),
-                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
-                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
-                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
-                                        mode=mode)
+#        compute_train_error_Mstep = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
+#                                        outputs=self.dfg.loss_Mstep(self.y),
+#                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+#                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
+#                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
+#                                        mode=mode)
         if self.interactive:
+            givens=[(self.y, test_set_y[:, batch_start:batch_stop]),
+                    (self.x, test_set_x[:,batch_start:batch_stop]),
+                    (self.y_tm1, train_set_y[-1:, batch_start:batch_stop])]
+            if self.no_past_obsv:
+                givens = givens[:-1]
             compute_test_error = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
                                                     outputs=[self.dfg.test_loss(self.y), self.dfg.y_next],
-                                                    givens=OrderedDict([(self.y, test_set_y[:, batch_start:batch_stop]),
-                                                                        (self.y_tm1, train_set_y[-1:, batch_start:batch_stop]),
-                                                                        (self.x, test_set_x[:,batch_start:batch_stop])]),
+                                                    givens=OrderedDict(givens),
                                                     mode=mode)
 
 
@@ -396,21 +408,27 @@ class MetaDFG(BaseEstimator):
         # compiling a Theano function `train_model_Estep` that returns the
         # cost, but in the same time updates the parameter of the
         # model based on the rules defined in `updates_Estep`
+        givens=[(self.y, train_set_y),
+                (self.x, train_set_x),
+                (self.y_tm1, train_set_y_tm1)]
+        if self.no_past_obsv:
+            givens = givens[:-1]
         train_model_Estep = theano.function(inputs=[l_r, mom],
                                         outputs=[cost_Estep, self.dfg.loss_Estep(self.y), self.dfg.y_pred, self.dfg.z_pred],
                                         updates=updates_Estep,
-                                        givens=OrderedDict([(self.y, train_set_y),
-                                                            (self.y_tm1, train_set_y_tm1),
-                                                            (self.x, train_set_x)]),
+                                        givens=OrderedDict(givens),
                                         mode=mode)
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
+        givens=[(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+                (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+                (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop])]
+        if self.no_past_obsv:
+            givens = givens[:-1]
         train_model_Mstep = theano.function(inputs=[index, n_ex, l_r, mom, self.start, self.n_iter, batch_size],
                                         outputs=[cost_Mstep, self.dfg.y_next, self.dfg.z_next],
                                         updates=updates_Mstep,
-                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
-                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
-                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
+                                        givens=OrderedDict(givens),
                                         mode=mode)
         ###############
         # TRAIN MODEL #
@@ -540,7 +558,8 @@ class xtxTestCase(unittest.TestCase):
                 learning_rate_decay=.9, learning_rate_decay_every=1000,
                 n_iter_low=[1, 1] , n_iter_high=[n_step / 2, n_step + 1], n_iter_change_every=2000,
                 final_momentum=0.9,
-                initial_momentum=0.5, momentum_switchover=1500)
+                initial_momentum=0.5, momentum_switchover=1500,
+                no_past_obsv=True)
         X_train = np.zeros((n_step, n_seq, 10))
         dfg.fit(Y_train=data, X_train=X_train, validation_frequency=10)
 
