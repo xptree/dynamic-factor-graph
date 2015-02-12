@@ -82,13 +82,16 @@ class FIR(Factor):
                                     n_steps=self.n_iter,
                                     outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)) , None ])
 class MLP(Factor):
-    def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter, batch_start, batch_stop):
+    def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter, batch_start, batch_stop, no_past_obsv=True):
         logger.info('A MLP factor built ...')
         Factor.__init__(self, n_in, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter)
         # real value passed through givens=[..]
         self.x = x
         self.y_tm1 = y_tm1
-        W_n_in = order*n_hidden+n_in+n_obsv
+        if no_past_obsv:
+            W_n_in = order * n_hidden + n_in
+        else:
+            W_n_in = order * n_hidden + n_in + n_obsv
         W_n_out = n_hidden
         W_bound = 4 * np.sqrt(6. / (W_n_in + W_n_out))
         W_init = np.asarray(np.random.uniform(size=(W_n_in, W_n_out),
@@ -117,21 +120,27 @@ class MLP(Factor):
         # Compute z_pred, y_pred for E_step
         # Here x should be T x n_seq x n_in
         # and y_tm1 should be T x n_seq x n_obsv
+        sequences=[ dict(input=self.x, taps=[0]),
+                    dict(input=self.z, taps=range(-order, 0)),
+                    dict(input=self.y_tm1, taps=[0]) ]
+        if no_past_obsv:
+            sequences = sequences[:-1]
         [self.z_pred, self.y_pred], _ = theano.scan(step,
-                                    sequences=[ dict(input=self.x, taps=[0]),
-                                                dict(input=self.z, taps=range(-order, 0)),
-                                                dict(input=self.y_tm1, taps=[0]) ])
-
+                                                    sequences=sequences)
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
 
         # Compute z_next, y_next for either M step or performance evaluation
         # Here x should be n_iter x effective_batch_size x n_in
         # and y_tm1 should be 1 x effective_batch_size x n_obsv
+
+        outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)),
+                            dict(initial=self.y_tm1[-1]) ]
+        if no_past_obsv:
+            outputs_info[-1] = None
         [self.z_next, self.y_next], _ = theano.scan(step,
                                     sequences=[ dict(input=self.x, taps=[0]) ],
                                     n_steps=self.n_iter,
-                                    outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)),
-                                                        dict(initial=self.y_tm1[-1]) ])
+                                    outputs_info=outputs_info)
 if __name__ == "__main__":
     pass
 
