@@ -144,15 +144,15 @@ class DFG(object):
     def nll_binary(self, y_1, y_2):
         return T.sum(T.nnet.binary_crossentropy(y_1, y_2))
 
-    def prec(self, y):
-        y_out = T.round(self.y_pred)
-        y_std = T.round(y)
+    def prec(self, y, y_pred):
+        y_out = T.round(y_pred[-1,:,-1])
+        y_std = T.round(y[-1,:,-1])
         true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
         false_pos = T.sum(T.neq(y_std, 1) * T.eq(y_out, 1))
         return (true_pos + 0.) / (true_pos + false_pos)
-    def rec(self, y):
-        y_out = T.round(self.y_pred)
-        y_std = T.round(y)
+    def rec(self, y, y_pred):
+        y_out = T.round(y_pred[-1,:,-1])
+        y_std = T.round(y[-1,:,-1])
         true_pos = T.sum(T.eq(y_std, 1) * T.eq(y_out, 1))
         false_neg = T.sum(T.eq(y_std, 1) * T.neq(y_out, 1))
         return (true_pos + 0.) / (true_pos + false_neg)
@@ -355,7 +355,7 @@ class MetaDFG(BaseEstimator):
             givens = givens[:-1]
         compute_train_error_Estep = theano.function(inputs=[],
                                                 outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred,
-                                                            self.dfg.prec(self.y), self.dfg.rec(self.y)],
+                                                            self.dfg.prec(self.y, self.dfg.y_pred), self.dfg.rec(self.y, self.dfg.y_pred)],
                                                 givens=OrderedDict(givens),
                                                 mode=mode)
 
@@ -372,7 +372,8 @@ class MetaDFG(BaseEstimator):
             if self.no_past_obsv:
                 givens = givens[:-1]
             compute_test_error = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
-                                                    outputs=[self.dfg.test_loss(self.y), self.dfg.y_next],
+                                                    outputs=[self.dfg.test_loss(self.y), self.dfg.y_next,
+                                                                self.dfg.prec(self.y, self.dfg.y_next), self.dfg.rec(self.y, self.dfg.y_next)],
                                                     givens=OrderedDict(givens),
                                                     mode=mode)
 
@@ -460,14 +461,22 @@ class MetaDFG(BaseEstimator):
                 train_loss_Estep, y_pred, prec, rec = compute_train_error_Estep()
                 #print np.max(y_pred), np.min(y_pred)
                 if self.interactive:
-                    test_losses = [compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)[0]
-                                    for i in xrange(n_test_batches)]
+                    test_losses, test_precs, test_recs = [], [], []
+                    for i in xrange(n_test_batches):
+                        test_loss, _, test_prec, test_rec = compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)
+                        test_losses.append(test_loss)
+                        test_precs.append(test_prec)
+                        test_recs.append(test_rec)
                     test_batch_sizes = [get_batch_size(i, n_test, self.batch_size)
                                         for i in xrange(n_test_batches)]
                     this_test_loss = np.average(test_losses,
                                                 weights=test_batch_sizes)
-                    logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f, te_loss %f' % \
-                                (epoch, train_loss_Estep, prec, rec, this_test_loss))
+                    this_test_prec = np.average(test_precs,
+                                                weights=test_batch_sizes)
+                    this_test_rec = np.average(test_recs,
+                                                weights=test_batch_sizes)
+                    logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f te_loss %f te_prec %f, te_rec %f' % \
+                                (epoch, train_loss_Estep, prec, rec, this_test_loss, this_test_prec, this_test_rec))
                 else:
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec))
@@ -549,19 +558,23 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             data = pickle.load(file)
-        #data = data[:,:2000,:]
+        data = data[:,:2000,:]
+        Y_train = data[:-7]
+        Y_test = data[-7:]
+        n_in = 10
         #print np.sum(data[-1,:,-1])
-        n_step, n_seq, n_obsv = data.shape
-        dfg = MetaDFG(n_in=10, n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        n_step, n_seq, n_obsv = Y_train.shape
+        dfg = MetaDFG(n_in=n_in, n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=2000, batch_size=n_seq, snapshot_every=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
-                learning_rate_decay=.9, learning_rate_decay_every=1000,
+                n_epochs=2000, batch_size=n_seq / 2 + 1, snapshot_every=100, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                learning_rate_decay=.9, learning_rate_decay_every=500,
                 n_iter_low=[1, 1] , n_iter_high=[n_step / 2, n_step + 1], n_iter_change_every=2000,
-                final_momentum=0.9,
-                initial_momentum=0.5, momentum_switchover=1500,
+                final_momentum=0.5,
+                initial_momentum=0.3, momentum_switchover=1500,
                 no_past_obsv=True)
-        X_train = np.zeros((n_step, n_seq, 10))
-        dfg.fit(Y_train=data, X_train=X_train, validation_frequency=10)
+        X_train = np.zeros((n_step, n_seq, n_in))
+        X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
+        dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=10)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
