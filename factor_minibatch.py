@@ -121,7 +121,7 @@ class MLP(Factor):
                                     sequences=[ dict(input=self.x, taps=[0]),
                                                 dict(input=self.z, taps=range(-order, 0)),
                                                 dict(input=self.y_tm1, taps=[0]) ])
-
+        # no y_tm1
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
 
         # Compute z_next, y_next for either M step or performance evaluation
