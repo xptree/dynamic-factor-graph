@@ -73,8 +73,8 @@ class FIR(Factor):
             y_t = T.dot(z_t, self.W_o) + self.b_o
             return z_t, y_t
 
-        # z_pred, y_pred for E_step
-        [self.z_pred, self.y_pred], _ = theano.scan(step,
+        # z_pred_Estep, y_pred_Estep for E_step
+        [self.z_pred_Estep, self.y_pred_Estep], _ = theano.scan(step,
                                     sequences=[ dict(input=self.z, taps=range(-order, 0)) ])
 
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
@@ -132,7 +132,7 @@ class MLP(Factor):
             y_t = T.nnet.sigmoid(T.dot(z_t, self.W_o) + self.b_o)
             return z_t, y_t
 
-        # Compute z_pred, y_pred for E_step
+        # Compute z_pred_Estep, y_pred_Estep for E_step
         # Here x should be T x n_seq x n_in
         # and y_tm1 should be T x n_seq x n_obsv
         sequences=[ dict(input=self.x, taps=[0]),
@@ -140,14 +140,23 @@ class MLP(Factor):
                     dict(input=self.y_tm1, taps=[0]) ]
         if no_past_obsv:
             sequences = sequences[:-1]
-        [self.z_pred, self.y_pred], _ = theano.scan(step,
-                                                    sequences=sequences)
-        self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
+        [self.z_pred_Estep, self.y_pred_Estep], _ = theano.scan(step,
+                                                                sequences=sequences)
+
+        self.z_subtensor = self.z[self.start:self.start+order+n_iter,batch_start:batch_stop]
+        sequences=[ dict(input=self.x, taps=[0]),
+                    dict(input=self.z_subtensor, taps=range(-order, 0)),
+                    dict(input=self.y_tm1, taps=[0]) ]
+        if no_past_obsv:
+            sequences = sequences[:-1]
+        [self.z_pred_Mstep, self.y_pred_Mstep], _ = theano.scan(step,
+                                                                sequences=sequences)
 
         # Compute z_next, y_next for either M step or performance evaluation
         # Here x should be n_iter x effective_batch_size x n_in
         # and y_tm1 should be 1 x effective_batch_size x n_obsv
 
+        self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
         outputs_info = [ dict(initial=self.z_subtensor, taps=range(-order, 0)),
                             dict(initial=self.y_tm1[-1]) ]
         if no_past_obsv:
