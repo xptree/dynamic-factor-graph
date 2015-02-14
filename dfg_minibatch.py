@@ -477,6 +477,8 @@ class MetaDFG(BaseEstimator):
                                                 weights=test_batch_sizes)
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f te_loss %f te_prec %f, te_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec, this_test_loss, this_test_prec, this_test_rec))
+                    logger.info('train_max %f train_min %f test_max %f test_min %f' % \
+                                (np.max(y_pred[-1,:,-1]), np.min(y_pred[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
                 else:
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec))
@@ -558,17 +560,18 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             Y, X = pickle.load(file)
-        #data = data[:,:2000,:]
+        X = X[:,:1000,:]
+        Y = Y[:,:1000,:]
+        n_in = X.shape[2]
         T = -1
         Y_train = Y[:T]
         Y_test = Y[T:]
         X_train = X[:T]
         X_test = X[T:]
-        n_in = X_train.shape[2]
         #print np.sum(data[-1,:,-1])
         n_step, n_seq, n_obsv = Y_train.shape
         logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
-        dfg = MetaDFG(n_in=n_in, n_hidden=10, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        dfg = MetaDFG(n_in=n_in, n_hidden=20, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
                 n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=.5, learning_rate_decay_every=100,

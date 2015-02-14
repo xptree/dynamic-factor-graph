@@ -95,6 +95,7 @@ class MLP(Factor):
         W_n_out = n_hidden
         W_n_hidden = (W_n_in + W_n_out) * 2 / 3
         layer_size = [W_n_in, W_n_hidden, W_n_out]
+        logger.info('MLP layer sizes: %d %d %d' % tuple(layer_size))
         self.Ws, self.bs = [], []
         for i in xrange(len(layer_size) - 1):
             W_bound = 4 * np.sqrt(6. / (layer_size[i] + layer_size[i+1]))

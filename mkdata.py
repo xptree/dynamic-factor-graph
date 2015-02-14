@@ -183,6 +183,8 @@ class mkdata(object):
                 #print item, mongo[item]['due']
                 self.ddls.append(util.parseDate(mongo[item]['due']))
         self.ddls.sort()
+        for item in self.ddls:
+            print (item - self.start).days / float((self.end - self.start).days)
     def getStageFeature(self):
         feature = {}
         for uid in self.feature:
