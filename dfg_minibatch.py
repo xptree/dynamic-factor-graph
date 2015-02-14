@@ -331,12 +331,12 @@ class MetaDFG(BaseEstimator):
         mom = T.scalar('mom', dtype=theano.config.floatX)
 
         cost_Estep = self.dfg.loss_Estep(self.y) \
-                + self.dfg.smooth_Estep \
+                + self.smooth_reg * self.dfg.smooth_Estep \
                 + self.L1_reg * self.dfg.L1 \
                 + self.L2_reg * self.dfg.L2_sqr
 
         cost_Mstep = self.dfg.loss_Mstep(self.y) \
-                + self.dfg.smooth_Mstep \
+                + self.smooth_reg * self.dfg.smooth_Mstep \
                 + self.L1_reg * self.dfg.L1 \
                 + self.L2_reg * self.dfg.L2_sqr
 
@@ -573,7 +573,7 @@ class xtxTestCase(unittest.TestCase):
         logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
         dfg = MetaDFG(n_in=n_in, n_hidden=20, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.01,
                 learning_rate_decay=.5, learning_rate_decay_every=100,
                 n_iter_low=[3] , n_iter_high=[n_step + 1], n_iter_change_every=100,
                 final_momentum=0.5,
