@@ -39,12 +39,12 @@ class DFG(object):
     binary: binary output units, use cross-entropy error
     softmax: single softmax out, use cross-entropy error
     """
-    def __init__(self, n_in, x, y_tm1, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
+    def __init__(self, n_in, x, y_pad, n_hidden, n_obsv, n_step, order, n_seq, start, n_iter,
                 factor_type='FIR', output_type='real',
-                no_past_obsv=True):
+                order_obsv=0, hidden_layer_config=None):
         self.n_in = n_in
         self.x = x
-        self.y_tm1 = y_tm1
+        self.y_pad = y_pad
         self.n_hidden = n_hidden
         self.n_obsv = n_obsv
         self.n_step = n_step
@@ -60,7 +60,8 @@ class DFG(object):
         self.batch_start = self.index * self.batch_size
         self.batch_stop = T.minimum(self.n_ex, (self.index + 1) * self.batch_size)
         self.effective_batch_size = self.batch_stop - self.batch_start
-        self.no_past_obsv = no_past_obsv
+        self.order_obsv=order_obsv
+        self.hidden_layer_config = hidden_layer_config
         if self.factor_type == 'FIR':
             # FIR factor with n_in > 0 is not implemented
             if self.n_in > 0:
@@ -71,12 +72,13 @@ class DFG(object):
                                         batch_start=self.batch_start, batch_stop=self.batch_stop)
         elif self.factor_type == 'MLP':
             self.factor = factor_minibatch.MLP(n_in=self.n_in,
-                                        x=self.x, y_tm1=self.y_tm1,
+                                        x=self.x, y_pad=self.y_pad,
                                         n_hidden=self.n_hidden,
                                         n_obsv=self.n_obsv, n_step=self.n_step,
                                         order=self.order, n_seq=self.n_seq, start=self.start, n_iter=self.n_iter,
                                         batch_start=self.batch_start, batch_stop=self.batch_stop,
-                                        no_past_obsv=self.no_past_obsv)
+                                        order_obsv=self.order_obsv,
+                                        hidden_layer_config=self.hidden_layer_config)
         else:
             raise NotImplementedError
         self.output_type = output_type
@@ -167,7 +169,8 @@ class MetaDFG(BaseEstimator):
                 initial_momentum=0.5, momentum_switchover=5,
                 n_iter_low=[20,], n_iter_high=[50,], n_iter_change_every=50,
                 snapshot_every=None, snapshot_path='tmp/',
-                no_past_obsv=True):
+                order_obsv=0,
+                hidden_layer_config=None):
         self.n_in = int(n_in)
         self.n_hidden = int(n_hidden)
         self.n_obsv = int(n_obsv)
@@ -198,13 +201,14 @@ class MetaDFG(BaseEstimator):
         else:
             self.snapshot_every = None
         self.snapshot_path = snapshot_path
-        self.no_past_obsv = no_past_obsv
+        self.order_obsv = int(order_obsv)
+        self.hidden_layer_config = hidden_layer_config
         self.ready()
 
     def ready(self):
         # observation (where first dimension is time)
         self.y = T.tensor3(name='y', dtype=theano.config.floatX)
-        self.y_tm1 = T.tensor3(name='y_tm1', dtype=theano.config.floatX)
+        self.y_pad = T.tensor3(name='y_pad', dtype=theano.config.floatX)
         self.x = T.tensor3(name='x', dtype=theano.config.floatX)
 
         # learning rate
@@ -222,12 +226,13 @@ class MetaDFG(BaseEstimator):
         else:
             raise NotImplementedError
 
-        self.dfg = DFG(n_in=self.n_in, x=self.x, y_tm1=self.y_tm1, n_hidden=self.n_hidden,
+        self.dfg = DFG(n_in=self.n_in, x=self.x, y_pad=self.y_pad, n_hidden=self.n_hidden,
                         n_obsv=self.n_obsv, n_step=self.n_step,
                         order=self.order, n_seq=self.n_seq, start=self.start,
                         n_iter=self.n_iter, factor_type=self.factor_type,
                         output_type=self.output_type,
-                        no_past_obsv=self.no_past_obsv)
+                        order_obsv=self.order_obsv,
+                        hidden_layer_config=self.hidden_layer_config)
 
     def shared_dataset(self, data):
         """ Load the dataset into shared variables """
@@ -314,10 +319,11 @@ class MetaDFG(BaseEstimator):
             self.interactive = False
 
         train_set_x = self.shared_dataset(X_train)
-        Y_train_tm1 = np.zeros_like(Y_train)
-        Y_train_tm1[1:,:,:]=Y_train[:-1,:,:]
+        Y_train_pad = np.zeros(shape=(self.n_step + self.order_obsv, self.n_seq, self.n_obsv),
+                                dtype=theano.config.floatX)
+        Y_train_pad[self.order_obsv:,:,:]=Y_train
         train_set_y = self.shared_dataset(Y_train)
-        train_set_y_tm1 = self.shared_dataset(Y_train_tm1)
+        train_set_y_pad = self.shared_dataset(Y_train_pad)
         n_train = train_set_y.get_value(borrow=True).shape[1]
         n_train_batches = int(np.ceil(float(n_train) / self.batch_size))
         if self.interactive:
@@ -352,8 +358,8 @@ class MetaDFG(BaseEstimator):
 
         givens=[(self.y, train_set_y),
                 (self.x, train_set_x),
-                (self.y_tm1, train_set_y_tm1)]
-        if self.no_past_obsv:
+                (self.y_pad, train_set_y_pad)]
+        if self.order_obsv == 0:
             givens = givens[:-1]
         compute_train_error_Estep = theano.function(inputs=[],
                                                 outputs=[self.dfg.loss_Estep(self.y), self.dfg.y_pred_Estep,
@@ -364,14 +370,14 @@ class MetaDFG(BaseEstimator):
 #        compute_train_error_Mstep = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
 #                                        outputs=self.dfg.loss_Mstep(self.y),
 #                                        givens=OrderedDict([(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
-#                                                            (self.y_tm1, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
+#                                                            (self.y_pad, train_set_y[self.start:self.start+1, batch_start:batch_stop]),
 #                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
 #                                        mode=mode)
         if self.interactive:
             givens=[(self.y, test_set_y[:, batch_start:batch_stop]),
                     (self.x, test_set_x[:,batch_start:batch_stop]),
-                    (self.y_tm1, train_set_y[-1:, batch_start:batch_stop])]
-            if self.no_past_obsv:
+                    (self.y_pad, train_set_y_pad)]
+            if self.order_obsv == 0:
                 givens = givens[:-1]
             compute_test_error = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
                                                     outputs=[self.dfg.test_loss(self.y), self.dfg.y_next,
@@ -413,8 +419,8 @@ class MetaDFG(BaseEstimator):
         # model based on the rules defined in `updates_Estep`
         givens=[(self.y, train_set_y),
                 (self.x, train_set_x),
-                (self.y_tm1, train_set_y_tm1)]
-        if self.no_past_obsv:
+                (self.y_pad, train_set_y_pad)]
+        if self.order_obsv == 0:
             givens = givens[:-1]
         train_model_Estep = theano.function(inputs=[l_r, mom],
                                         outputs=[cost_Estep, self.dfg.loss_Estep(self.y), self.dfg.y_pred_Estep, self.dfg.z_pred_Estep],
@@ -425,8 +431,8 @@ class MetaDFG(BaseEstimator):
         # the rules defined in `updates_Mstep`
         givens=[(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
                 (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop]),
-                (self.y_tm1, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop])]
-        if self.no_past_obsv:
+                (self.y_pad, train_set_y_pad) ]
+        if self.order_obsv == 0:
             givens = givens[:-1]
         train_model_Mstep = theano.function(inputs=[index, n_ex, l_r, mom, self.start, self.n_iter, batch_size],
                                         outputs=[cost_Mstep, self.dfg.y_pred_Mstep, self.dfg.z_pred_Mstep],
@@ -480,7 +486,7 @@ class MetaDFG(BaseEstimator):
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f te_loss %f te_prec %f, te_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec, this_test_loss, this_test_prec, this_test_rec))
                     logger.info('train_max %f train_min %f test_max %f test_min %f' % \
-                                (np.max(y_pred[-1,:,-1]), np.min(y_pred[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
+                                (np.max(y_pred_Estep[-1,:,-1]), np.min(y_pred_Estep[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
                 else:
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec))
@@ -563,10 +569,10 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             Y, X = pickle.load(file)
-        X = X[:,:1000,:]
-        Y = Y[:,:1000,:]
+        #X = X[:,:1000,:]
+        #Y = Y[:,:1000,:]
         n_in = X.shape[2]
-        T = -1
+        T = -5
         Y_train = Y[:T]
         Y_test = Y[T:]
         X_train = X[:T]
@@ -575,14 +581,15 @@ class xtxTestCase(unittest.TestCase):
         n_step, n_seq, n_obsv = Y_train.shape
         logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
 
-        dfg = MetaDFG(n_in=n_in, n_hidden=30, n_obsv=n_obsv, n_step=n_step, order=5, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        dfg = MetaDFG(n_in=n_in, n_hidden=30, n_obsv=n_obsv, n_step=n_step, order=3, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
                 n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.01,
                 learning_rate_decay=.5, learning_rate_decay_every=100,
                 n_iter_low=[3] , n_iter_high=[n_step + 1], n_iter_change_every=100,
                 final_momentum=0.5,
                 initial_momentum=0.3, momentum_switchover=1500,
-                no_past_obsv=True)
+                order_obsv=3,
+                hidden_layer_config=[100])
         #X_train = np.zeros((n_step, n_seq, n_in))
         #X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
         dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=10)
