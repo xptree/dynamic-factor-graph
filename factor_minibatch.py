@@ -58,7 +58,7 @@ class MLP(Factor):
         # real value passed through givens=[..]
         self.x = x
         self.y_pad = y_pad
-        W_n_in = order * n_hidden + n_in + order_obsv * n_obsv
+        W_n_in = order * n_hidden + n_in + order_obsv * (n_obsv - 1)
         W_n_out = n_hidden
         if hidden_layer_config is None:
             W_n_hidden = (W_n_in + W_n_out) * 2 / 3
@@ -93,6 +93,9 @@ class MLP(Factor):
                 z_tmp, ..., z_tm1 \in R^{batch_size, n_hidden}
                 y_pad \in R^{batch_size, n_obsv}
             """
+            args = list(args)
+            for i in xrange(order_obsv):
+                args[-i-1] = args[-i-1][:,:-1]
             z_t = T.concatenate(args, axis=1) # (batch_size, n_hidden x order + n_in + n_obsv)
             for i in xrange(len(layer_size) - 1):
                 this_W = self.Ws[i]
@@ -129,7 +132,7 @@ class MLP(Factor):
         self.z_subtensor = self.z[self.start:self.start+order,batch_start:batch_stop]
         self.y_subtensor = self.y_pad[self.start:self.start+order_obsv,batch_start:batch_stop]
         outputs_info = [ dict(initial=self.z_subtensor if order > 1 else self.z_subtensor[0], taps=range(-order, 0)),
-                            dict(initial=self.y_subtensor if order_obsv > 1 else self.y_subtensort[0], taps=range(-order_obsv, 0)) ]
+                            dict(initial=self.y_subtensor if order_obsv > 1 else self.y_subtensor[0], taps=range(-order_obsv, 0)) ]
         if order_obsv == 0:
             outputs_info[-1] = None
         [self.z_next, self.y_next], _ = theano.scan(step,

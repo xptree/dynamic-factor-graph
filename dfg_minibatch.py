@@ -114,8 +114,12 @@ class DFG(object):
             self.loss_Mstep = lambda y : (self.se(self.y_pred_Mstep, y) + self.se(self.z_pred_Mstep, self.z_std)) / self.effective_batch_size
             self.test_loss = lambda y : self.se(self.y_next, y) / self.effective_batch_size
         elif self.output_type == 'binary':
-            self.loss_Estep = lambda y : (self.nll_binary(self.y_pred_Estep, y) + self.se(self.z_pred_Estep, self.z[self.order:])) / n_seq
-            self.loss_Mstep = lambda y : (self.nll_binary(self.y_pred_Mstep, y) + self.se(self.z_pred_Mstep, self.z_std)) / self.effective_batch_size
+            self.loss_Estep = lambda y : (self.nll_binary(self.y_pred_Estep, y) \
+                                + self.se(self.z_pred_Estep, self.z[self.order:]) \
+                                + self.nll_binary(self.y_pred_Estep[:,:,-1], y[:,:,-1])) / n_seq
+            self.loss_Mstep = lambda y : (self.nll_binary(self.y_pred_Mstep, y) \
+                                + self.se(self.z_pred_Mstep, self.z_std) \
+                                + self.nll_binary(self.y_pred_Mstep[:,:,-1], y[:,:,-1])) / self.effective_batch_size
             self.test_loss = lambda y : self.nll_binary(self.y_next, y) / self.effective_batch_size
         else:
             raise NotImplementedError
@@ -569,10 +573,10 @@ class xtxTestCase(unittest.TestCase):
         DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             Y, X = pickle.load(file)
-        #X = X[:,:1000,:]
-        #Y = Y[:,:1000,:]
+        X = X[:,:1000,:]
+        Y = Y[:,:1000,:]
         n_in = X.shape[2]
-        T = -5
+        T = -1
         Y_train = Y[:T]
         Y_test = Y[T:]
         X_train = X[:T]
@@ -581,7 +585,7 @@ class xtxTestCase(unittest.TestCase):
         n_step, n_seq, n_obsv = Y_train.shape
         logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
 
-        dfg = MetaDFG(n_in=n_in, n_hidden=30, n_obsv=n_obsv, n_step=n_step, order=3, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        dfg = MetaDFG(n_in=n_in, n_hidden=40, n_obsv=n_obsv, n_step=n_step, order=3, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
                 n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.01,
                 learning_rate_decay=.5, learning_rate_decay_every=100,

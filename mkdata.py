@@ -20,7 +20,7 @@ DEV_PATH = "../../xtx/dev/"
 RAW_GRADE_DIR = DEV_PATH + "RawData/grades/"
 GRADE_DIR = DEV_PATH + "Data/Excel.json"
 FORUM_DIR = DEV_PATH + "Data/Forum.json"
-COURSE_INFO_DIR = DEV_PATH + "Data/CourseInfo.json"
+COURSE_INFO_DIR = DEV_PATH + "Data/Course_.json"
 BEHAVIOR_DIR = DEV_PATH + "Data/LearningBehavior.json"
 LEARNING_TIME_DIR = DEV_PATH + 'Data/Trackinglog.json'
 MONGO_DIR = DEV_PATH + 'Data/MongoDB.json'
@@ -179,9 +179,12 @@ class mkdata(object):
                 course, categort = util.parseLog(item)
             except:
                 continue
-            if course == self.course and mongo[item]['due'] is not None:
-                #print item, mongo[item]['due']
-                self.ddls.append(util.parseDate(mongo[item]['due']))
+            if course == self.course:
+                if mongo[item]['due'] is not None:
+                    #print item, mongo[item]['due']
+                    self.ddls.append(util.parseDate(mongo[item]['due']))
+                if mongo[item]['start'] is not None:
+                    print item, mongo[item]['start']
         self.ddls.sort()
         for item in self.ddls:
             print (item - self.start).days / float((self.end - self.start).days)
@@ -246,6 +249,10 @@ class mkdata(object):
                 tmp += [0.] * 6
             for T in xrange(len(self.ddls)+1):
                 self.X[uid][T] += tmp
+    def getSequentialRelease(self):
+        with open(MONGO_DIR) as f:
+            mongo = json.load(f)
+
 
     def generate_Y(self):
         self.getForumData() #5
