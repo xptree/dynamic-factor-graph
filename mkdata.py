@@ -370,52 +370,7 @@ class mkdata(object):
                 #last_score = 0 if j == 0 or j == len(scoreColumn) - 1 else float(self.score[user][-1])
                 last_score = 0
                 self.score[user].append(this_score + last_score)
-        '''
-        self.ability = {}
-        for uid in self.feature:
-            self.ability[uid] = [0.]
-        tot = dict.fromkeys(self.feature.keys(), 0.)
-        for j in xrange(len(scoreColumn)):
-            for i in xrange(1, len(users)):
-                user = str(int(users[i]))
-                if user not in self.feature:
-                    break
-                tot[user] += float(scores[j][i])
-            tmp = sorted(tot.items(), key=lambda x:x[1])
-            old_value = 0
-            for i in xrange(len(tmp)):
-                user = tmp[i][0]
-                if i > 0 and tmp[i][1] == tmp[i-1][1]:
-                    self.ability[user].append(old_value / float(len(tot)))
-                else:
-                    self.ability[user].append(i / float(len(tot)))
-                    old_value = i
-        for i in xrange(1, len(users)):
-            user = str(int(users[i]))
-            if user not in self.feature:
-                break
-            self.ability[user].append((len(self.feature) - i) / float(len(self.feature)))
-        '''
-'''
-        self.y_obsv = {}
-        sample = [self.start] + self.ddls + [self.end - datetime.timedelta(1)]
-        print sample
-        for uid in self.ability:
-            self.y_obsv[uid] = {}
-            p = -1
-            for date_obj in util.daterange(self.start, self.end):
-                if date_obj == sample[p + 1]:
-                    p += 1
-                    y3 = self.ability[uid][p]
-                else:
-                    y1 = self.ability[uid][p]
-                    y2 = self.ability[uid][p + 1]
-                    x3m1 = (date_obj - sample[p]).days
-                    x2m1 = (sample[p + 1]-sample[p]).days
-                    y3 = y1 + (y2 - y1)*x3m1/x2m1
-                self.y_obsv[uid][(date_obj - self.start).days] = y3
-'''
-
+        
 class Circuit(mkdata):
     def __init__(self):
         self.course = "TsinghuaX/20220332_2X/_"

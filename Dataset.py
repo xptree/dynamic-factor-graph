@@ -55,11 +55,21 @@ class Dataset(object):
                     fid = forum[item['father']]['user']
                     if fid in self.feature:
                         self.feature[fid][single_date][2] += 1
+					T = self.getTimeStamp(single_date)
+					if T > 0:
+						self.feature[uid][single_date][5] += self.score[fid][T-1]
+						self.feature[fid][single_date][5] += self.score[uid][T-1]
                 self.feature[uid][single_date][3] += item['length']
                 self.feature[uid][single_date][4] += item['vote_up']
+
+    def getScore(self):
+        fileDir = os.path.join(self.path, 'grade.json')
+        with open(fileDir, 'rb') as f:
+            self.score = json.load(f)
     def getLearningData(self):
         # video_time assign_time
-        self.expand_feature(2)
+		# video_day assign_day
+        self.expand_feature(4)
         with open(os.path.join(self.path, 'duration.json')) as f:
             learn = json.load(f)
         for uid in learn:
@@ -71,13 +81,16 @@ class Dataset(object):
                     continue
                 self.feature[uid][single_date][0] += v[0]
                 self.feature[uid][single_date][1] += v[1]
+				self.feature[uid][single_date][2] += v[0] > 0
+				self.feature[uid][single_date][3] += v[1] > 0
 
     def getBehaviorData(self):
-        # video problem other
-        #self.expand_feature(3)
-        self.expand_feature(2)
+        # video problem sequential chapter ddl_hit
+        self.expand_feature(5)
         with open(os.path.join(self.path, 'behavior.json')) as f:
             behavior = json.load(f)
+		with open(os.path.join(self.path, 'element.json')) as f:
+            element = json.load(f, object_hook=json_util.object_hook)
         for uid in behavior:
             if uid not in self.feature:
                 continue
@@ -85,11 +98,21 @@ class Dataset(object):
                 single_date = util.parseDate(date)
                 if single_date < self.start or single_date >= self.end:
                     continue
+				course, catagory = util.parseLog(log)
                 for log in behavior[uid][date]:
-                    if log.find('video') > -1:
+					if element[log]['due'] is not None:
+						if single_date <= element[log]['due']:
+							self.feature[uid][single_date][4] += 1
+                    if catagory == 'video':
                         self.feature[uid][single_date][0] += 1
-                    elif log.find('problem') > -1:
+                    elif catagory == 'problem':
                         self.feature[uid][single_date][1] += 1
+					elif catagory == 'sequential':
+						self.feature[uid][single_date][2] += 1
+					elif catagory == 'chapter':
+						self.feature[uid][single_date][3] += 1
+
+
     def save(self, fpath='.', fname=None):
         """save a json or pickle representation of data set"""
         fpathstart, fpathext = os.path.splitext(fpath)
@@ -211,11 +234,14 @@ class Dataset(object):
                 self.X[uid][T] += tmp
 
     def generate_Y(self):
-        self.getForumData() #5
-        self.getBehaviorData() #3
-        self.getLearningData() #2
-        self.getDDL()
+		self.getDDL()
+		self.getScore()
+        self.getForumData() 
+        self.getLearningData() 
+        self.getBehaviorData() 
         self.getStageFeature()
+		threshold = config.getThreshold()
+		self.filte(filter_type='binary', threshold=threshold)
 
     def generate_X(self):
         self.X = {}
@@ -223,10 +249,8 @@ class Dataset(object):
             self.X[uid] = [[] for i in xrange(len(self.ddls)+1)]
         # Demographics Feature
         self.getDemographics()
-        print self.X['95792']
-        # Course Release Feature
-        # Forum related Feature
-    def base_line(self):
+    
+	def base_line(self):
         for i in xrange(len(self.ddls) + 1):
             print precision_recall_fscore_support(self.dataset[-1,:,-1], self.dataset[i,:,-1], average='micro')
     def __get_score__(self, scoreColumn, fname):
