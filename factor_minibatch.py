@@ -58,7 +58,7 @@ class MLP(Factor):
         # real value passed through givens=[..]
         self.x = x
         self.y_pad = y_pad
-        W_n_in = order * n_hidden + n_in + order_obsv * (n_obsv - 1)
+        W_n_in = order * n_hidden + n_in + order_obsv * n_obsv
         W_n_out = n_hidden
         if hidden_layer_config is None:
             W_n_hidden = (W_n_in + W_n_out) * 2 / 3
@@ -93,9 +93,9 @@ class MLP(Factor):
                 z_tmp, ..., z_tm1 \in R^{batch_size, n_hidden}
                 y_pad \in R^{batch_size, n_obsv}
             """
-            args = list(args)
-            for i in xrange(order_obsv):
-                args[-i-1] = args[-i-1][:,:-1]
+        #    args = list(args)
+        #    for i in xrange(order_obsv):
+        #        args[-i-1] = args[-i-1][:,:-1]
             z_t = T.concatenate(args, axis=1) # (batch_size, n_hidden x order + n_in + n_obsv)
             for i in xrange(len(layer_size) - 1):
                 this_W = self.Ws[i]

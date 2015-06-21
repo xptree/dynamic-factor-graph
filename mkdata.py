@@ -14,6 +14,7 @@ import pickle
 from xlrd import open_workbook
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score
 
 logger = logging.getLogger(__name__)
 DEV_PATH = "../../xtx/dev/"
@@ -52,35 +53,26 @@ class mkdata(object):
         for uid in self.feature:
             for single_date in self.feature[uid]:
                 self.feature[uid][single_date] = [0.] * num + self.feature[uid][single_date]
+    def expand_X(self, num):
+        self.n_in += num
+        for uid in self.X:
+            for T in xrange(len(self.ddls) + 1):
+                self.X[uid][T] = [0.] * num + self.X[uid][T]
+    def getTimeStamp(self, date_obj):
+        for index, item in enumerate(self.ddls):
+            if date_obj <= item:
+                return index
+        return len(self.ddls)
     def getUser(self):
         with open(GRADE_DIR) as f:
             grades = json.load(f)[0]
         for uid in grades:
             if self.course in grades[uid] and grades[uid][self.course] > 0:
                 self.feature[uid] = {}
-    def getForumData(self):
-        # post, reply, replyed, length, upvoted
-        self.expand_feature(5)
-        with open(FORUM_DIR) as f:
-            forum = json.load(f)
-        for oid, item in forum.iteritems():
-            if item['course'] != self.course:
-                continue
-            single_date = util.parseDate(item['date'])
-            uid = item['user']
-            if uid in self.feature and single_date >= self.start and single_date < self.end:
-                if item['father'] == None:
-                    self.feature[uid][single_date][0] += 1
-                else:
-                    self.feature[uid][single_date][1] += 1
-                    fid = forum[item['father']]['user']
-                    if fid in self.feature:
-                        self.feature[fid][single_date][2] += 1
-                self.feature[uid][single_date][3] += item['length']
-                self.feature[uid][single_date][4] += item['vote_up']
     def getLearningData(self):
         # video_time assign_time
-        self.expand_feature(2)
+        # video_day assign_day
+        self.expand_feature(4)
         with open(LEARNING_TIME_DIR) as f:
             learn = json.load(f)
         for uid in learn:
@@ -94,12 +86,20 @@ class mkdata(object):
                     continue
                 self.feature[uid][single_date][0] += item[1]
                 self.feature[uid][single_date][1] += item[2]
+                self.feature[uid][single_date][2] += 1
+                self.feature[uid][single_date][3] += 1
+
     def getBehaviorData(self):
-        # video problem other
+        # video problem
+        # in time visit
+        # chapter
         #self.expand_feature(3)
-        self.expand_feature(2)
+        # ddl hit
+        self.expand_feature(6)
         with open(BEHAVIOR_DIR) as f:
             behavior = json.load(f)
+        with open(MONGO_DIR) as f:
+            mongo = json.load(f)
         for uid in behavior:
             if uid not in self.feature:
                 continue
@@ -110,12 +110,29 @@ class mkdata(object):
                 for log in behavior[uid][date]:
                     course, catagory = util.parseLog(log)
                     if course == self.course:
+                        if log in mongo and mongo[log]['due'] is not None:
+                            T_ddl = self.getTimeStamp(util.parseDate(mongo[log]['due']))
+                            T =  self.getTimeStamp(single_date)
+                            if T_ddl == T:
+                                self.feature[uid][single_date][5] += 1
                         if catagory == 'video':
                             self.feature[uid][single_date][0] += 1
                         elif catagory == 'problem':
                             self.feature[uid][single_date][1] += 1
-#                        else:
-#                            self.feature[uid][single_date][2] += 1
+                        elif catagory == 'sequential':
+                            self.feature[uid][single_date][2] += 1
+                            try:
+                                date_obj = mongo[log]['start']
+                            except:
+                                print log
+                                continue
+                            if date_obj is None:
+                                continue
+                            date_obj = util.parseDate(date_obj)
+                            if self.getTimeStamp(date_obj) == self.getTimeStamp(single_date):
+                                self.feature[uid][single_date][3] += 1
+                        elif catagory == 'chapter':
+                            self.feature[uid][single_date][4] += 1
     def save(self, fpath='.', fname=None):
         """save a json or pickle representation of data set"""
         fpathstart, fpathext = os.path.splitext(fpath)
@@ -183,11 +200,11 @@ class mkdata(object):
                 if mongo[item]['due'] is not None:
                     #print item, mongo[item]['due']
                     self.ddls.append(util.parseDate(mongo[item]['due']))
-                if mongo[item]['start'] is not None:
-                    print item, mongo[item]['start']
         self.ddls.sort()
+        if self.course == "TsinghuaX/20220332_2X/_":
+            self.ddls = self.ddls[:-1]
         for item in self.ddls:
-            print (item - self.start).days / float((self.end - self.start).days)
+            print item, (item - self.start).days / float((self.end - self.start).days)
     def getStageFeature(self):
         feature = {}
         for uid in self.feature:
@@ -220,19 +237,26 @@ class mkdata(object):
         for i in xrange(self.feature_num):
             for T in xrange(len(self.ddls) + 1):
                 tmp = sorted([self.feature[uid][T][i] for uid in self.feature], reverse=True)
-                door = tmp[int(len(self.feature) * threshold)]
-                if door == tmp[0]:
-                    door -= EPS
-                elif door == tmp[-1]:
-                    door += EPS
-                for uid in self.feature:
-                    self.feature[uid][T][i] = 1 if self.feature[uid][T][i] > door else 0
+                if tmp[0] == 0:
+                    tmp[0] = EPS
+                if filter_type == 'binary':
+                    door = tmp[int(len(self.feature) * threshold)]
+                    if door == tmp[0]:
+                        door -= EPS
+                    elif door == tmp[-1]:
+                        door += EPS
+                    for uid in self.feature:
+                        self.feature[uid][T][i] = 1 if self.feature[uid][T][i] > door else 0
+                elif filter_type == 'real':
+                    for uid in self.feature:
+                        self.feature[uid][T][i] = self.feature[uid][T][i] / float(tmp[0])
+
     def getDemographics(self):
         # binary feature
         # male, female, el, jhs, hs, c, b, m, p, [0,18], [18,23], [23, 28], [28, 36], [36, 51], [> 51]
         with open(DEMOGRAPHICS_DIR) as f:
             demos = json.load(f)
-        self.n_in = 15
+        self.n_in += 15
         for uid in self.feature:
             tmp = []
             demo = demos[uid]
@@ -249,30 +273,85 @@ class mkdata(object):
                 tmp += [0.] * 6
             for T in xrange(len(self.ddls)+1):
                 self.X[uid][T] += tmp
+    def getForumData(self):
+        # post, reply, replyed, length, upvoted, cert-friend
+        self.expand_feature(6)
+        with open(FORUM_DIR) as f:
+            forum = json.load(f)
+        for oid, item in forum.iteritems():
+            if item['course'] != self.course:
+                continue
+            single_date = util.parseDate(item['date'])
+            uid = item['user']
+            if uid in self.feature and single_date >= self.start and single_date < self.end:
+                if item['father'] == None:
+                    self.feature[uid][single_date][0] += 1
+                else:
+                    self.feature[uid][single_date][1] += 1
+                    fid = forum[item['father']]['user']
+                    if fid in self.feature:
+                        self.feature[fid][single_date][2] += 1
+                        T = self.getTimeStamp(single_date)
+                        if T > 0 and self.score[fid][T-1] > .5:
+                            self.feature[uid][single_date][5] += 1
+                        if T > 0 and self.score[uid][T-1] > .5:
+                            self.feature[fid][single_date][5] += 1
+                self.feature[uid][single_date][3] += item['length']
+                self.feature[uid][single_date][4] += item['vote_up']
     def getSequentialRelease(self):
         with open(MONGO_DIR) as f:
             mongo = json.load(f)
-
+        self.expand_X(1)
+        for item in mongo:
+            try:
+                course, categort = util.parseLog(item)
+            except:
+                continue
+            if course == self.course:
+                if mongo[item]['start'] is not None and item.find('sequential') != -1:
+                    print item, mongo[item]['start']
+                    date_obj = util.parseDate(mongo[item]['start'])
+                    T = self.getTimeStamp(date_obj)
+                    for uid in self.X:
+                        self.X[uid][T][0] += 1
 
     def generate_Y(self):
-        self.getForumData() #5
-        self.getBehaviorData() #3
-        self.getLearningData() #2
-        self.getDDL()
-        self.getStageFeature()
+        raise NotImplementedError
+
+    def regenerate(self):
+        for uid in self.feature:
+            for T in xrange(len(self.ddls) + 1):
+                self.X[uid][T] += self.feature[uid][T][:-1]
+                self.feature[uid][T] = self.feature[uid][T][-1:]
+        self.n_in = self.n_in + self.feature_num - 1
+        self.feature_num = 1
 
     def generate_X(self):
+        self.n_in = 0
         self.X = {}
         for uid in self.feature:
             self.X[uid] = [[] for i in xrange(len(self.ddls)+1)]
         # Demographics Feature
         self.getDemographics()
-        print self.X['95792']
+        #self.getSequentialRelease()
         # Course Release Feature
-        # Forum related Feature
     def base_line(self):
-        for i in xrange(len(self.ddls) + 1):
-            print precision_recall_fscore_support(self.dataset[-1,:,-1], self.dataset[i,:,-1], average='micro')
+        for i in xrange(5, len(self.ddls) + 1):
+            median_tp1 = np.percentile(self.dataset[4,:,-1], 70.3)
+            median_t = np.percentile(self.dataset[i,:,-1], 70.3)
+            if median_tp1 == 1.:
+                median_tp1 -= EPS
+            if median_t == 1.:
+                median_t -= EPS
+            print roc_auc_score(self.dataset[i,:,-1] > median_t, self.dataset[4,:,-1])
+            print precision_recall_fscore_support(self.dataset[4,:,-1] > median_tp1, self.dataset[i,:,-1] > median_t, average='micro')
+    def dumpScoreDotDat(self, fileName):
+        with open(fileName, 'wb') as f:
+            title = '\t'.join(['userid'] + ['ps_%d' % i for i in xrange(len(self.score.values()[0]))])
+            print >> f, title
+            for k, v in self.score.iteritems():
+                content = [k] + [str(item) for item in v]
+                print >> f, '\t'.join(content)
     def __get_score__(self, scoreColumn, fname):
         book = open_workbook(RAW_GRADE_DIR + fname)
         sheet = book.sheet_by_index(0)
@@ -288,7 +367,8 @@ class mkdata(object):
             self.score[user] = []
             for j in xrange(len(scoreColumn)):
                 this_score = float(scores[j][i])
-                last_score = 0 if j == 0 or j == len(scoreColumn) - 1 else float(self.score[user][-1])
+                #last_score = 0 if j == 0 or j == len(scoreColumn) - 1 else float(self.score[user][-1])
+                last_score = 0
                 self.score[user].append(this_score + last_score)
         '''
         self.ability = {}
@@ -341,10 +421,52 @@ class Circuit(mkdata):
         self.course = "TsinghuaX/20220332_2X/_"
         mkdata.__init__(self)
 
+    def getScore(self):
+        # Column D to M
+        scoreColumn = ['F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'BJ']
+        fname = 'grades_TsinghuaX-20220332_2X-_.xlsx'
+        self.__get_score__(scoreColumn, fname)
+
+    def generate_Y(self):
+        self.getDDL()
+        self.getScore()
+        self.getForumData()
+        self.getLearningData()
+        self.getBehaviorData()
+        self.getStageFeature()
+        self.filte(filter_type='real', threshold=41. / 411)
+
+class DataStructure(mkdata):
+    def __init__(self):
+        self.course = "TsinghuaX/30240184_1X/_"
+        mkdata.__init__(self)
+    def getUser(self):
+        with open(GRADE_DIR) as f:
+            grades = json.load(f)[0]
+        for uid in grades:
+            if self.course in grades[uid]:
+                self.feature[uid] = {}
+    def getScore(self):
+        scoreColumn = ['F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O']
+        fname = 'grades_TsinghuaX-30240184_1X-_.xlsx'
+        self.__get_score__(scoreColumn, fname)
+
+
 class Combin(mkdata):
     def __init__(self):
         self.course = "TsinghuaX/60240013X/_"
         mkdata.__init__(self)
+    def getUser(self):
+        with open(GRADE_DIR) as f:
+            grades = json.load(f)[0]
+        for uid in grades:
+            if self.course in grades[uid]:
+                self.feature[uid] = {}
+    def getScore(self):
+        scoreColumn = [chr(ord('D') + i) for i in xrange(ord('Z')-ord('D')+1)] + ['A' + chr(ord('A') + i) for i in xrange(ord('J')-ord('A')+1)]
+        print scoreColumn
+        fname = 'grades_TsinghuaX-60240013X-_.xlsx'
+        self.__get_score__(scoreColumn, fname)
 
 class Finance2014(mkdata):
     def __init__(self):
@@ -353,32 +475,45 @@ class Finance2014(mkdata):
 
     def getScore(self):
         # Column D to M
-        scoreColumn = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'P']
+        scoreColumn = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'O']
         fname = 'grades_TsinghuaX-80512073_2014_1X-_.xlsx'
         self.__get_score__(scoreColumn, fname)
 
     def generate_Y(self):
-#        self.getForumData()
-        self.getBehaviorData()
-        self.getLearningData()
         self.getDDL()
         self.getScore()
+        self.getForumData()
+        self.getLearningData()
+        self.getBehaviorData()
         self.getStageFeature()
-        self.filte(filter_type='binary', threshold=0.296)
+        self.filte(filter_type='real', threshold=0.296)
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    '''
     fin2 = Finance2014()
     fin2.generate_Y()
     fin2.generate_X()
-#    fin2.save('data/fin2.json')
+    fin2.regenerate()
     fin2.save_dataset('data/fin2.pkl')
     fin2.base_line()
+    '''
 #    combin = Combin()
 #    combin.generate_Y()
 #    combin.save('combin.pkl')
-#    circuit = Circuit()
-#    circuit.generate_Y()
-#    circuit.save('circuit.json')
-
-
+    '''
+    circuit = Circuit()
+    circuit.generate_Y()
+    circuit.generate_X()
+    circuit.regenerate()
+    circuit.save_dataset('data/circuit.pkl')
+    '''
+    '''
+    dsa = DataStructure()
+    dsa.getScore()
+    dsa.dumpScoreDotDat('data_structure.dat')
+    '''
+    com = Combin()
+    com.getScore()
+    com.dumpScoreDotDat('combinatorics.dat')

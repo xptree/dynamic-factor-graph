@@ -20,6 +20,9 @@ import cPickle as pickle
 import factor_minibatch
 import unittest
 import matplotlib.pylab as plt
+from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score
+import datetime
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,45 @@ mode = theano.Mode(linker='cvm')
 #mode = theano.Mode(optimizer=None)
 #mode = 'ProfileMode'
 DEBUG = True
+THRESHOLD = (1 - 41./513) * 100
+WEIGHT = [1./28] * 8 + [5. / 7]
+DATA_DIR = 'data/circuit.pkl'
+THRESHOLD = 70.3
+WEIGHT = [5.] * 10 + [50.]
+DATA_DIR = 'data/fin2.pkl'
+
+def getBestThreshold(yres, ystd):
+    yList = sorted([ (yres[i], ystd[i]) for i in xrange(len(yres)) ], key = lambda item: item[0])
+    tn = tp = fn = fp = 0.
+    Bestf1 = 0.
+    for y_, y in yList:
+        if y == 1:
+            tp += 1
+        else:
+            fn += 1
+    for item in yList:
+        #this item predicted as negtive
+        if item[1] == 1:
+            fp += 1
+            tp -= 1
+        else:
+            tn += 1
+            fn -= 1
+        if tp + fn == 0 or tp + fp == 0:
+            continue
+        prec = tp / (tp + fn)
+        rec = tp / (tp + fp)
+        if prec + rec < 1e-5:
+            continue
+        f1 = 2 * prec * rec / (prec + rec)
+        if f1 > Bestf1:
+            Bestf1 = f1
+            threshold = item[0]
+    return threshold
+def metric(y_pred, y_std):
+    threshold = getBestThreshold(y_pred, y_std)
+    prf = precision_recall_fscore_support(y_std, y_pred > threshold, average='micro')
+    return 'auc %f, prec %f, rec %f, f1 %f' % (roc_auc_score(y_std, y_pred), prf[0], prf[1], prf[2])
 
 class DFG(object):
     """     Dynamic factor graph class
@@ -116,10 +158,10 @@ class DFG(object):
         elif self.output_type == 'binary':
             self.loss_Estep = lambda y : (self.nll_binary(self.y_pred_Estep, y) \
                                 + self.se(self.z_pred_Estep, self.z[self.order:]) \
-                                + self.nll_binary(self.y_pred_Estep[:,:,-1], y[:,:,-1])) / n_seq
+                                + 0 * self.nll_binary(self.y_pred_Estep[:,:,-1], y[:,:,-1])) / n_seq
             self.loss_Mstep = lambda y : (self.nll_binary(self.y_pred_Mstep, y) \
                                 + self.se(self.z_pred_Mstep, self.z_std) \
-                                + self.nll_binary(self.y_pred_Mstep[:,:,-1], y[:,:,-1])) / self.effective_batch_size
+                                + 0 * self.nll_binary(self.y_pred_Mstep[:,:,-1], y[:,:,-1])) / self.effective_batch_size
             self.test_loss = lambda y : self.nll_binary(self.y_next, y) / self.effective_batch_size
         else:
             raise NotImplementedError
@@ -319,15 +361,31 @@ class MetaDFG(BaseEstimator):
             self.interactive = True
             test_set_y = self.shared_dataset(Y_test)
             test_set_x = self.shared_dataset(X_test)
+            Y_test_binary = np.zeros_like(Y_test,
+                                    dtype=theano.config.floatX)
+            for t in xrange(Y_test.shape[0]):
+                for i in xrange(self.n_obsv):
+                    threshold = np.percentile(Y_test[t,:,i], THRESHOLD)
+                    Y_test_binary[t,:,i] = Y_test[t,:,i] >= threshold
+            test_set_y_binary = self.shared_dataset(Y_test_binary)
         else:
             self.interactive = False
 
         train_set_x = self.shared_dataset(X_train)
+        # generate Y_pad
         Y_train_pad = np.zeros(shape=(self.n_step + self.order_obsv, self.n_seq, self.n_obsv),
                                 dtype=theano.config.floatX)
         Y_train_pad[self.order_obsv:,:,:]=Y_train
+        # generate Y_binary
+        Y_train_binary = np.zeros_like(Y_train,
+                                dtype=theano.config.floatX)
+        for t in xrange(self.n_step):
+            for i in xrange(self.n_obsv):
+                threshold = np.percentile(Y_train[t,:,i], THRESHOLD)
+                Y_train_binary[t,:,i] = Y_train[t,:,i] >= threshold
         train_set_y = self.shared_dataset(Y_train)
         train_set_y_pad = self.shared_dataset(Y_train_pad)
+        train_set_y_binary = self.shared_dataset(Y_train_binary)
         n_train = train_set_y.get_value(borrow=True).shape[1]
         n_train_batches = int(np.ceil(float(n_train) / self.batch_size))
         if self.interactive:
@@ -360,7 +418,7 @@ class MetaDFG(BaseEstimator):
         get_batch_size = theano.function(inputs=[index, n_ex, batch_size],
                                             outputs=effective_batch_size)
 
-        givens=[(self.y, train_set_y),
+        givens=[(self.y, train_set_y_binary),
                 (self.x, train_set_x),
                 (self.y_pad, train_set_y_pad)]
         if self.order_obsv == 0:
@@ -378,14 +436,13 @@ class MetaDFG(BaseEstimator):
 #                                                            (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop])]),
 #                                        mode=mode)
         if self.interactive:
-            givens=[(self.y, test_set_y[:, batch_start:batch_stop]),
+            givens=[(self.y, test_set_y_binary[:, batch_start:batch_stop]),
                     (self.x, test_set_x[:,batch_start:batch_stop]),
                     (self.y_pad, train_set_y_pad)]
             if self.order_obsv == 0:
                 givens = givens[:-1]
             compute_test_error = theano.function(inputs=[index, n_ex, self.start, self.n_iter, batch_size],
-                                                    outputs=[self.dfg.test_loss(self.y), self.dfg.y_next,
-                                                                self.dfg.prec(self.y, self.dfg.y_next), self.dfg.rec(self.y, self.dfg.y_next)],
+                                                    outputs=[self.dfg.test_loss(self.y), self.dfg.y_next, self.y],
                                                     givens=OrderedDict(givens),
                                                     mode=mode)
 
@@ -421,7 +478,7 @@ class MetaDFG(BaseEstimator):
         # compiling a Theano function `train_model_Estep` that returns the
         # cost, but in the same time updates the parameter of the
         # model based on the rules defined in `updates_Estep`
-        givens=[(self.y, train_set_y),
+        givens=[(self.y, train_set_y_binary),
                 (self.x, train_set_x),
                 (self.y_pad, train_set_y_pad)]
         if self.order_obsv == 0:
@@ -433,7 +490,7 @@ class MetaDFG(BaseEstimator):
                                         mode=mode)
         # updates the parameter of the model based on
         # the rules defined in `updates_Mstep`
-        givens=[(self.y, train_set_y[self.start:self.start+self.n_iter, batch_start:batch_stop]),
+        givens=[(self.y, train_set_y_binary[self.start:self.start+self.n_iter, batch_start:batch_stop]),
                 (self.x, train_set_x[self.start:self.start+self.n_iter, batch_start:batch_stop]),
                 (self.y_pad, train_set_y_pad) ]
         if self.order_obsv == 0:
@@ -448,7 +505,7 @@ class MetaDFG(BaseEstimator):
         ###############
         logger.info('... training')
         epoch = 0
-
+        auc = []
         while (epoch < self.n_epochs):
             epoch = epoch + 1
             effective_momentum = self.final_momentum \
@@ -466,6 +523,15 @@ class MetaDFG(BaseEstimator):
                     example_cost, example_y_pred_Mstep, example_z_pred_Mstep = train_model_Mstep(minibatch_idx, n_train, self.learning_rate_Mstep,
                                                 effective_momentum, head, n_iter, self.batch_size)
                     average_cost.append(example_cost)
+                    '''
+                    test_losses, test_precs, test_recs = [], [], []
+                    auc_now = []
+                    for ii in xrange(n_test_batches):
+                        test_loss, y_next, y_std = compute_test_error(ii, n_test, self.n_step, Y_test.shape[0], self.batch_size)
+                        for j in xrange(y_next.shape[0]):
+                            auc_now.append(roc_auc_score(y_std[j,:,-1], y_next[j,:,-1]))
+                    auc.append(np.mean(auc_now))
+                    '''
                 logger.info('epoch %d batch %d M_step cost=%f' % (epoch, minibatch_idx, np.mean(average_cost)))
                 #iters = (epoch - 1) * n_train_batches + minibatch_idx + 1
             if epoch % validation_frequency == 0:
@@ -475,22 +541,28 @@ class MetaDFG(BaseEstimator):
                 if self.interactive:
                     test_losses, test_precs, test_recs = [], [], []
                     for i in xrange(n_test_batches):
-                        test_loss, _, test_prec, test_rec = compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)
-                        test_losses.append(test_loss)
-                        test_precs.append(test_prec)
-                        test_recs.append(test_rec)
-                    test_batch_sizes = [get_batch_size(i, n_test, self.batch_size)
-                                        for i in xrange(n_test_batches)]
-                    this_test_loss = np.average(test_losses,
-                                                weights=test_batch_sizes)
-                    this_test_prec = np.average(test_precs,
-                                                weights=test_batch_sizes)
-                    this_test_rec = np.average(test_recs,
-                                                weights=test_batch_sizes)
-                    logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f te_loss %f te_prec %f, te_rec %f' % \
-                                (epoch, train_loss_Estep, prec, rec, this_test_loss, this_test_prec, this_test_rec))
-                    logger.info('train_max %f train_min %f test_max %f test_min %f' % \
-                                (np.max(y_pred_Estep[-1,:,-1]), np.min(y_pred_Estep[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
+                        test_loss, y_next, y_std = compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)
+                        logger.info('epoch %d, %s batch tr_loss %f te_loss %f' % \
+                                    (epoch, 'valid' if i==0 else 'test', train_loss_Estep, test_loss))
+                        for j in xrange(y_next.shape[0]):
+                            logger.info('behavior at time stamp %d' % (self.n_step + j + 1))
+                            logger.info('%s' % \
+                                        metric(y_next[j,:,-1], y_std[j,:,-1]))
+                            #logger.info('train_max %f train_min %f test_max %f test_min %f' % \
+                        #            (np.max(y_pred_Estep[-1,:,-1]), np.min(y_pred_Estep[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
+                        if i == 0:
+                            y_historic = Y_train[:,:self.batch_size,:]
+                        else:
+                            y_historic = Y_train[:,self.batch_size:,:]
+                        y_std = np.concatenate([y_historic, y_std])
+                        y_next = np.concatenate([y_historic, y_next])
+                        cert_pred = np.squeeze(np.average(y_next, axis=0, weights=WEIGHT))
+                        cert_std = np.squeeze(np.average(y_std, axis=0, weights=WEIGHT))
+                        median = np.percentile(cert_std, THRESHOLD)
+                        cert_std = cert_std > median
+                        logger.info('certificate prediction')
+                        logger.info('%s' % \
+                                metric(cert_pred, cert_std))
                 else:
                     logger.info('epoch %d, tr_loss %f tr_prec %f tr_rec %f' % \
                                 (epoch, train_loss_Estep, prec, rec))
@@ -541,6 +613,10 @@ class MetaDFG(BaseEstimator):
                     fname = '%s.%s-snapshot-%d.json' % (class_name, date_str, epoch + 1)
                     fabspath = os.path.join(self.snapshot_path, fname)
                     self.save(fpath=fabspath)
+        with open('auc.json', 'wb') as f:
+            json.dump(auc, f,
+                        indent=4, separators=(',', ': '))
+
 '''
 class sinTestCase(unittest.TestCase):
 
@@ -570,13 +646,13 @@ class sinTestCase(unittest.TestCase):
 '''
 class xtxTestCase(unittest.TestCase):
     def runTest(self):
-        DATA_DIR = 'data/fin2.pkl'
         with open(DATA_DIR, 'rb') as file:
             Y, X = pickle.load(file)
-        X = X[:,:1000,:]
-        Y = Y[:,:1000,:]
+        #X = X[:,:1000,:]
+        #Y = Y[:,:1000,:]
         n_in = X.shape[2]
-        T = -1
+        T = -6
+        #T = -9
         Y_train = Y[:T]
         Y_test = Y[T:]
         X_train = X[:T]
@@ -584,22 +660,24 @@ class xtxTestCase(unittest.TestCase):
         #print np.sum(data[-1,:,-1])
         n_step, n_seq, n_obsv = Y_train.shape
         logger.info('load from pkl train_step=%d test_step=%d, n_seq=%d n_obsv=%d n_in=%d', n_step, X_test.shape[0], n_seq, n_obsv, n_in)
-
-        dfg = MetaDFG(n_in=n_in, n_hidden=40, n_obsv=n_obsv, n_step=n_step, order=3, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
+        start = datetime.datetime.now()
+        dfg = MetaDFG(n_in=n_in, n_hidden=2, n_obsv=n_obsv, n_step=n_step, order=2, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=3000, batch_size=n_seq / 2 + 1, snapshot_every=500, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.01,
+                n_epochs=2000, batch_size=n_seq , snapshot_every=1000, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=.5, learning_rate_decay_every=100,
-                n_iter_low=[3] , n_iter_high=[n_step + 1], n_iter_change_every=100,
+                n_iter_low=[n_step / 2] , n_iter_high=[n_step + 1], n_iter_change_every=100,
                 final_momentum=0.5,
                 initial_momentum=0.3, momentum_switchover=1500,
-                order_obsv=3,
-                hidden_layer_config=[100])
+                order_obsv=0,
+                hidden_layer_config=[])
         #X_train = np.zeros((n_step, n_seq, n_in))
         #X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
-        dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=10)
+        dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=2000)
+        print datetime.datetime.now() - start
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(message)s') # include timestamp
     unittest.main()
+
 
