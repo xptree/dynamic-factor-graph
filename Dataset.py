@@ -234,8 +234,8 @@ class Dataset(object):
                 self.X[uid][T] += tmp
 
     def generate_Y(self):
-		self.getDDL()
-		self.getScore()
+        self.getDDL()
+        self.getScore()
         self.getForumData() 
         self.getLearningData() 
         self.getBehaviorData() 
@@ -249,72 +249,10 @@ class Dataset(object):
             self.X[uid] = [[] for i in xrange(len(self.ddls)+1)]
         # Demographics Feature
         self.getDemographics()
-    
-	def base_line(self):
-        for i in xrange(len(self.ddls) + 1):
-            print precision_recall_fscore_support(self.dataset[-1,:,-1], self.dataset[i,:,-1], average='micro')
-    def __get_score__(self, scoreColumn, fname):
-        book = open_workbook(RAW_GRADE_DIR + fname)
-        sheet = book.sheet_by_index(0)
-        scores = [sheet.col_values(util.getExcelColumnId(columnStr))
-                    for columnStr in scoreColumn]
-        self.score = {}
-        users = sheet.col_values(0)
-        for i in xrange(1, len(users)):
-            user = str(int(users[i]))
-            if user not in self.feature:
-                logger.info('excel break from user %s' % user)
-                break
-            self.score[user] = []
-            for j in xrange(len(scoreColumn)):
-                this_score = float(scores[j][i])
-                last_score = 0 if j == 0 or j == len(scoreColumn) - 1 else float(self.score[user][-1])
-                self.score[user].append(this_score + last_score)
-
-class Circuit(mkdata):
-    def __init__(self):
-        self.course = "TsinghuaX/20220332_2X/_"
-        mkdata.__init__(self)
-
-class Combin(mkdata):
-    def __init__(self):
-        self.course = "TsinghuaX/60240013X/_"
-        mkdata.__init__(self)
-
-class Finance2014(mkdata):
-    def __init__(self):
-        self.course = "TsinghuaX/80512073_2014_1X/_2014_"
-        mkdata.__init__(self)
-
-    def getScore(self):
-        # Column D to M
-        scoreColumn = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'P']
-        fname = 'grades_TsinghuaX-80512073_2014_1X-_.xlsx'
-        self.__get_score__(scoreColumn, fname)
-
-    def generate_Y(self):
-#        self.getForumData()
-        self.getBehaviorData()
-        self.getLearningData()
-        self.getDDL()
-        self.getScore()
-        self.getStageFeature()
-        self.filte(filter_type='binary', threshold=0.296)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    fin2 = Finance2014()
-    fin2.generate_Y()
-    fin2.generate_X()
-#    fin2.save('data/fin2.json')
-    fin2.save_dataset('data/fin2.pkl')
-    fin2.base_line()
-#    combin = Combin()
-#    combin.generate_Y()
-#    combin.save('combin.pkl')
-#    circuit = Circuit()
-#    circuit.generate_Y()
-#    circuit.save('circuit.json')
-
-
-
+    dataset = Dataset()
+    dataset.generate_Y()
+    dataset.generate_X()
+    dataset.save_dataset('data.pkl')
