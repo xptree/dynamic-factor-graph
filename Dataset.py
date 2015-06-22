@@ -9,7 +9,9 @@ import os
 from bson import json_util
 import util
 import json
-import datetime 
+import datetime
+import cPickle as pickle
+import numpy as np
 
 EPS=1e-2
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ class Dataset(object):
                 self.feature[uid][single_date] = []
         logger.info('course: %s user: %d start: %s end: %s', self.course,
                 len(self.feature), self.start.isoformat(), self.end.isoformat())
-    
+
     def getTimeStamp(self, date_obj):
         for index, item in enumerate(self.ddls):
             if date_obj <= item:
@@ -194,10 +196,12 @@ class Dataset(object):
         sample = [(item - self.start).days for item in sample]
         self.feature = {}
         for uid in feature:
-             self.feature[uid] = []
-             p = 0
-             tmp = [0.] * self.feature_num
-             for T in xrange(0, (self.end-self.start).days):
+            if uid in self.score:
+                self.score[uid].append(0.)
+            self.feature[uid] = []
+            p = 0
+            tmp = [0.] * self.feature_num
+            for T in xrange(0, (self.end-self.start).days):
                 if T <= sample[p]:
                     for i in xrange(self.feature_num):
                         tmp[i] += feature[uid][T][i]
@@ -213,8 +217,8 @@ class Dataset(object):
                 try:
                     self.feature[uid][j].append(self.score[uid][j])
                 except:
-                    print self.feature[uid], j
-                    print self.score[uid], j
+                    print len(self.feature[uid]), j
+                    print len(self.score[uid]), j
                     exit()
         for i in xrange(self.feature_num):
             for T in xrange(len(self.ddls) + 1):
@@ -239,8 +243,8 @@ class Dataset(object):
                 tmp.append(1 if demo['gender'] == task else 0)
             for task in ['el', 'jhs', 'hs', 'c', 'b', 'm', 'p']:
                 tmp.append(1 if demo['education'] == task else 0)
-            if demo['age'] is not None:
-                age = 2015 - demo['age']
+            if demo['birth'] is not None:
+                age = 2015 - demo['birth']
                 task = [0, 18, 23, 28, 36, 51, 1000]
                 for i in xrange(len(task)-1):
                     tmp.append(1 if age >= task[i] and age < task[i+1] else 0)
@@ -252,9 +256,9 @@ class Dataset(object):
     def generate_Y(self):
         self.getDDL()
         self.getScore()
-        self.getForumData() 
-        self.getLearningData() 
-        self.getBehaviorData() 
+        self.getForumData()
+        self.getLearningData()
+        self.getBehaviorData()
         self.getStageFeature()
         threshold = config.getThreshold(self.course)
         self.filte(filter_type='binary', threshold=threshold)

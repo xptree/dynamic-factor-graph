@@ -18,11 +18,11 @@ def getStart(course):
 
 def getEnd(course):
     title = {}
-    title["TsinghuaX/00690242_2015X/2015_T1"] = date(2015, 6, 24)
-    title["TsinghuaX/30240184_2015X/2015_T1"] = date(2015, 6, 24)
+    title["TsinghuaX/00690242_2015X/2015_T1"] = date(2015, 7, 5)
+    title["TsinghuaX/30240184_2015X/2015_T1"] = date(2015, 7, 5)
     return title[course]
 
-def getDDL(course):  
+def getDDL(course):
     if course == "TsinghuaX/30240184_2015X/2015_T1":
         ddl = []
         with open('../element.json', 'rb') as f:
@@ -30,9 +30,10 @@ def getDDL(course):
         for k,v in element.iteritems():
             if k.find('30240184') > -1 and v['due'] is not None:
                 dt = datetime.strptime(v['due'], '%Y-%m-%dT%H:%M:%S')
-                dt = util.roundTime(dt)
+                dt = util.roundTime(dt, 60 * 60)
                 ddl.append(dt.date())
         ddl.sort()
+        ddl[-1] = date(2015, 6, 30)
         return ddl
     else:
         raise NotImplementedError
