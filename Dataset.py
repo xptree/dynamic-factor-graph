@@ -8,14 +8,20 @@ import Config as config
 import os
 from bson import json_util
 import util
+import json
+import datetime 
+
+EPS=1e-2
+logger = logging.getLogger(__name__)
 
 class Dataset(object):
-    def __init__(self):
+    def __init__(self, course):
         '''generate_Y data as the following format
             feature[uid][T] is a list of features for user uid at time T
             the feature shoule be additive
             we remove register-only student from the dataset
         '''
+        self.course = course
         self.feature = {}
         self.feature_num = 0
         self.path = config.getDataDir()
@@ -27,6 +33,12 @@ class Dataset(object):
                 self.feature[uid][single_date] = []
         logger.info('course: %s user: %d start: %s end: %s', self.course,
                 len(self.feature), self.start.isoformat(), self.end.isoformat())
+    
+    def getTimeStamp(self, date_obj):
+        for index, item in enumerate(self.ddls):
+            if date_obj <= item:
+                return index
+        return len(self.ddls)
 
     def expand_feature(self, num):
         self.feature_num += num
@@ -40,12 +52,12 @@ class Dataset(object):
             self.feature[uid] = {}
 
     def getForumData(self):
-        # post, reply, replyed, length, upvoted
-        self.expand_feature(5)
+        # post, reply, replyed, length, upvoted, cert-friend
+        self.expand_feature(6)
         with open(os.path.join(self.path, 'forum.json')) as f:
-            forum = json.load(f, object_hook=json_util.object_hook)
+            forum = json.load(f)
         for oid, item in forum.iteritems():
-            single_date = item['date']
+            single_date = util.parseDate(item['date'])
             uid = item['user']
             if uid in self.feature and single_date >= self.start and single_date < self.end:
                 if item['father'] == None:
@@ -55,10 +67,10 @@ class Dataset(object):
                     fid = forum[item['father']]['user']
                     if fid in self.feature:
                         self.feature[fid][single_date][2] += 1
-					T = self.getTimeStamp(single_date)
-					if T > 0:
-						self.feature[uid][single_date][5] += self.score[fid][T-1]
-						self.feature[fid][single_date][5] += self.score[uid][T-1]
+                        T = self.getTimeStamp(single_date)
+                        if T > 0:
+                            self.feature[uid][single_date][5] += self.score[fid][T-1]
+                            self.feature[fid][single_date][5] += self.score[uid][T-1]
                 self.feature[uid][single_date][3] += item['length']
                 self.feature[uid][single_date][4] += item['vote_up']
 
@@ -81,15 +93,15 @@ class Dataset(object):
                     continue
                 self.feature[uid][single_date][0] += v[0]
                 self.feature[uid][single_date][1] += v[1]
-				self.feature[uid][single_date][2] += v[0] > 0
-				self.feature[uid][single_date][3] += v[1] > 0
+                self.feature[uid][single_date][2] += (v[0] > 0)
+                self.feature[uid][single_date][3] += (v[1] > 0)
 
     def getBehaviorData(self):
         # video problem sequential chapter ddl_hit
         self.expand_feature(5)
         with open(os.path.join(self.path, 'behavior.json')) as f:
             behavior = json.load(f)
-		with open(os.path.join(self.path, 'element.json')) as f:
+        with open(os.path.join(self.path, 'element.json')) as f:
             element = json.load(f, object_hook=json_util.object_hook)
         for uid in behavior:
             if uid not in self.feature:
@@ -98,20 +110,19 @@ class Dataset(object):
                 single_date = util.parseDate(date)
                 if single_date < self.start or single_date >= self.end:
                     continue
-				course, catagory = util.parseLog(log)
                 for log in behavior[uid][date]:
-					if element[log]['due'] is not None:
-						if single_date <= element[log]['due']:
+                    course, catagory = util.parseLog(log)
+                    if element[log]['due'] is not None:
+						if single_date <= util.parseDate(element[log]['due']):
 							self.feature[uid][single_date][4] += 1
                     if catagory == 'video':
                         self.feature[uid][single_date][0] += 1
                     elif catagory == 'problem':
                         self.feature[uid][single_date][1] += 1
-					elif catagory == 'sequential':
+                    elif catagory == 'sequential':
 						self.feature[uid][single_date][2] += 1
-					elif catagory == 'chapter':
+                    elif catagory == 'chapter':
 						self.feature[uid][single_date][3] += 1
-
 
     def save(self, fpath='.', fname=None):
         """save a json or pickle representation of data set"""
@@ -198,8 +209,13 @@ class Dataset(object):
         # first merge self.feature and self.score
         self.feature_num += 1
         for uid in self.score:
-           for j in xrange(len(self.ddls) + 1):
-               self.feature[uid][j].append(self.score[uid][j])
+            for j in xrange(len(self.ddls) + 1):
+                try:
+                    self.feature[uid][j].append(self.score[uid][j])
+                except:
+                    print self.feature[uid], j
+                    print self.score[uid], j
+                    exit()
         for i in xrange(self.feature_num):
             for T in xrange(len(self.ddls) + 1):
                 tmp = sorted([self.feature[uid][T][i] for uid in self.feature], reverse=True)
@@ -240,8 +256,8 @@ class Dataset(object):
         self.getLearningData() 
         self.getBehaviorData() 
         self.getStageFeature()
-		threshold = config.getThreshold()
-		self.filte(filter_type='binary', threshold=threshold)
+        threshold = config.getThreshold(self.course)
+        self.filte(filter_type='binary', threshold=threshold)
 
     def generate_X(self):
         self.X = {}
@@ -252,7 +268,7 @@ class Dataset(object):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    dataset = Dataset()
+    dataset = Dataset("TsinghuaX/30240184_2015X/2015_T1")
     dataset.generate_Y()
     dataset.generate_X()
     dataset.save_dataset('data.pkl')
