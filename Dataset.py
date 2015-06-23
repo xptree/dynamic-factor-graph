@@ -270,9 +270,18 @@ class Dataset(object):
         # Demographics Feature
         self.getDemographics()
 
+    def regenerate(self):
+        for uid in self.feature:
+            for T in xrange(len(self.ddls) + 1):
+                self.X[uid][T] += self.feature[uid][T][:-1]
+                self.feature[uid][T] = self.feature[uid][T][-1:]
+        self.n_in = self.n_in + self.feature_num - 1
+        self.feature_num = 1
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     dataset = Dataset("TsinghuaX/30240184_2015X/2015_T1")
     dataset.generate_Y()
     dataset.generate_X()
-    dataset.save_dataset('data.pkl')
+    dataset.regenerate()
+    dataset.save_dataset(config.getPklDir())

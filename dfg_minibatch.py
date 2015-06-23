@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 # encoding: utf-8
 # File Name: dfg.py
 # Author: Jiezhong Qiu
@@ -12,17 +11,15 @@ import theano
 import theano.tensor as T
 from sklearn.base import BaseEstimator
 import logging
-import time
 import json
 import datetime
 import os
 import cPickle as pickle
 import factor_minibatch
 import unittest
-import matplotlib.pylab as plt
+#import matplotlib.pylab as plt
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.metrics import roc_auc_score
-import datetime
 
 
 logger = logging.getLogger(__name__)

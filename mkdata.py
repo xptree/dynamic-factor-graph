@@ -370,7 +370,7 @@ class mkdata(object):
                 #last_score = 0 if j == 0 or j == len(scoreColumn) - 1 else float(self.score[user][-1])
                 last_score = 0
                 self.score[user].append(this_score + last_score)
-        
+
 class Circuit(mkdata):
     def __init__(self):
         self.course = "TsinghuaX/20220332_2X/_"
