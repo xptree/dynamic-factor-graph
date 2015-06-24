@@ -341,7 +341,7 @@ class MetaDFG(BaseEstimator):
 
     def fit(self, Y_train=None, Y_test=None,
             X_train=None, X_test=None,
-            validation_frequency=100):
+            validation_frequency=None):
         """Fit model
 
         Pass in Y_test to compute test error and report during training
@@ -531,10 +531,9 @@ class MetaDFG(BaseEstimator):
                     '''
                 logger.info('epoch %d batch %d M_step cost=%f' % (epoch, minibatch_idx, np.mean(average_cost)))
                 #iters = (epoch - 1) * n_train_batches + minibatch_idx + 1
-            if epoch % validation_frequency == 0:
+            if validation_frequency is not None and epoch % validation_frequency == 0:
                 # Computer loss on training set (conside Estep loss only)
                 train_loss_Estep, y_pred_Estep, prec, rec = compute_train_error_Estep()
-                #print np.max(y_pred_Estep), np.min(y_pred_Estep)
                 if self.interactive:
                     test_losses, test_precs, test_recs = [], [], []
                     for i in xrange(n_test_batches):
@@ -543,18 +542,16 @@ class MetaDFG(BaseEstimator):
                                     (epoch, 'valid' if i==0 else 'test', train_loss_Estep, test_loss))
                         for j in xrange(y_next.shape[0]):
                             logger.info('behavior at time stamp %d' % (self.n_step + j + 1))
-                            logger.info('%s' % \
-                                        metric(y_next[j,:,-1], y_std[j,:,-1]))
-                            #logger.info('train_max %f train_min %f test_max %f test_min %f' % \
-                        #            (np.max(y_pred_Estep[-1,:,-1]), np.min(y_pred_Estep[-1,:,-1]), np.max(_[-1,:,-1]), np.min(_[-1,:,-1])))
                         if i == 0:
                             y_historic = Y_train[:,:self.batch_size,:]
                         else:
                             y_historic = Y_train[:,self.batch_size:,:]
                         y_std = np.concatenate([y_historic, y_std])
                         y_next = np.concatenate([y_historic, y_next])
-                        cert_pred = np.squeeze(np.average(y_next, axis=0, weights=WEIGHT))
-                        cert_std = np.squeeze(np.average(y_std, axis=0, weights=WEIGHT))
+                        #cert_pred = np.squeeze(np.average(y_next, axis=0, weights=WEIGHT))
+                        cert_pred = np.squeeze(np.average(y_next, axis=0))
+                        #cert_std = np.squeeze(np.average(y_std, axis=0, weights=WEIGHT))
+                        cert_std = np.squeeze(np.average(y_std, axis=0))
                         median = np.percentile(cert_std, THRESHOLD)
                         cert_std = cert_std > median
                         logger.info('certificate prediction')
@@ -572,34 +569,7 @@ class MetaDFG(BaseEstimator):
                 if len(self.n_iter_low) > 1:
                     self.n_iter_low = self.n_iter_low[1:]
                     self.n_iter_high = self.n_iter_high[1:]
-            '''
-            # Snapshot
-            if self.snapshot_every is not None:
-                if (epoch - 1) % self.snapshot_every == 0:
-                    date_obj = datetime.datetime.now()
-                    date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
-                    class_name = self.__class__.__name__
-                    fname = '%s.%s-snapshot-%d.png' % (class_name, date_str, epoch)
-                    plt.figure()
-                    n = Y_train.shape[0] + Y_test.shape[0]
-                    x = np.linspace(0, n, n)
-                    len_train = Y_train.shape[0]
-                    x_train, x_test = x[:len_train], x[len_train:]
-                    plt.plot(x_train, np.squeeze(Y_train), 'b', linewidth=2)
-                    plt.plot(x_train, np.squeeze(example_y_pred_Estep), 'r', linewidth=2)
-                    plt.savefig(self.snapshot_path + fname)
-                    plt.close()
-                    if self.interactive:
-                        y_test_next = compute_test_error(0, n_test, self.n_step, Y_test.shape[0], self.batch_size)[1]
-                        #logger.info('epoch %d test loss=%f' % (epoch, test_loss))
-                        plt.figure()
-                        plt.plot(x_test, np.squeeze(Y_test), 'b', linewidth=2)
-                        plt.plot(x_test, np.squeeze(y_test_next), 'r', linewidth=2)
-                        fname = '%s.%s-snapshot-%d_test.png' % (class_name, date_str, epoch)
-                        plt.ylim(-3, 3)
-                        plt.savefig(self.snapshot_path + fname)
-                        plt.close()
-            '''
+
             # Snapshot
             if self.snapshot_every is not None:
                 if (epoch + 1) % self.snapshot_every == 0:
@@ -610,37 +580,19 @@ class MetaDFG(BaseEstimator):
                     fname = '%s.%s-snapshot-%d.json' % (class_name, date_str, epoch + 1)
                     fabspath = os.path.join(self.snapshot_path, fname)
                     self.save(fpath=fabspath)
-        with open('auc.json', 'wb') as f:
-            json.dump(auc, f,
-                        indent=4, separators=(',', ': '))
+        for i in xrange(n_test_batches):
+            test_loss, y_next, y_std = compute_test_error(i, n_test, self.n_step, Y_test.shape[0], self.batch_size)
+            if i == 0:
+                y_historic = Y_train[:,:self.batch_size,:]
+            else:
+                y_historic = Y_train[:,self.batch_size:,:]
+            y_std = np.concatenate([y_historic, y_std])
+            y_next = np.concatenate([y_historic, y_next])
+        cert_pred = np.squeeze(np.average(y_next, axis=0))
+        logger.info('dump certificate prediction result')
+        return cert_pred
 
-'''
-class sinTestCase(unittest.TestCase):
 
-    def runTest(self):
-        n = 2500
-        x = np.linspace(0, n, n)
-        sita = [.2, .331, .42, .51, .74]
-        sita = sita[:3]
-        y = np.zeros(n)
-        for item in sita:
-            y += np.sin(item * x)
-        # n_t x n_seq x n_in
-        n_train = n - 500
-        n_test = 500
-        y_train = y[:n_train]
-        y_test = y[n_train:]
-        y_train = y_train.reshape(n_train, 1, 1)
-        y_test = y_test.reshape(n_test, 1, 1)
-        dfg = MetaDFG(n_hidden=3, n_obsv=1, n_step=n_train, order=25, n_seq=1, learning_rate_Estep=0.01, learning_rate_Mstep=0.001,
-                n_epochs=1000, batch_size=1, snapshot_every=1, L1_reg=0.02, L2_reg=0.02, smooth_reg=0.01,
-                learning_rate_decay=.9, learning_rate_decay_every=50,
-                n_iter_low=[20, 20, 20, 20] , n_iter_high=[31, 51, 71, 101], n_iter_change_every=15,
-                final_momentum=0.9,
-                initial_momentum=0.5, momentum_switchover=500)
-        dfg.fit(y_train, y_test, validation_frequency=1)
-        assert True
-'''
 class xtxTestCase(unittest.TestCase):
     def runTest(self):
         with open(DATA_DIR, 'rb') as file:
@@ -660,15 +612,13 @@ class xtxTestCase(unittest.TestCase):
         start = datetime.datetime.now()
         dfg = MetaDFG(n_in=n_in, n_hidden=2, n_obsv=n_obsv, n_step=n_step, order=2, n_seq=n_seq, learning_rate_Estep=0.5, learning_rate_Mstep=0.1,
                 factor_type='MLP', output_type='binary',
-                n_epochs=2000, batch_size=n_seq , snapshot_every=1000, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
+                n_epochs=10, batch_size=n_seq , snapshot_every=None, L1_reg=0.00, L2_reg=0.00, smooth_reg=0.00,
                 learning_rate_decay=.5, learning_rate_decay_every=100,
                 n_iter_low=[n_step / 2] , n_iter_high=[n_step + 1], n_iter_change_every=100,
                 final_momentum=0.5,
                 initial_momentum=0.3, momentum_switchover=1500,
                 order_obsv=0,
                 hidden_layer_config=[])
-        #X_train = np.zeros((n_step, n_seq, n_in))
-        #X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
         dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=2000)
         print datetime.datetime.now() - start
 

@@ -39,10 +39,13 @@ def getDDL(course):
         raise NotImplementedError
 
 def getThreshold(course):
-    return 0.7
+    return 0.8
 
 def getPklDir():
     return '/home/jiezhong/prediction/certificate/dynamic-factor-graph/data/data.pkl'
+
+def getPredictionResultDir():
+    return 'a.txt'
 
 if __name__ == '__main__':
     print getDDL("TsinghuaX/30240184_2015X/2015_T1")

@@ -162,8 +162,10 @@ class Dataset(object):
         n_step = len(self.ddls) + 1
         n_seq = len(self.feature)
         dataset = np.zeros(shape=(n_step, n_seq, self.feature_num))
+        user_id = []
         for index, uid in enumerate(self.feature):
             assert len(self.feature[uid]) == len(self.ddls) + 1
+            user_id.append(uid)
             for T in xrange(len(self.feature[uid])):
                 assert len(self.feature[uid][T]) == self.feature_num
                 for i in xrange(self.feature_num):
@@ -178,7 +180,7 @@ class Dataset(object):
                     X[T][index][i] = self.X[uid][T][i]
 
         with open(fabspath, 'wb') as file:
-            pickle.dump((dataset, X), file, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump((dataset, X, user_id), file, protocol=pickle.HIGHEST_PROTOCOL)
         self.dataset = dataset
 
     def getDDL(self):
