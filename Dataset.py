@@ -3,6 +3,7 @@
 # File Name: mkdata.py
 # Author: Jiezhong Qiu
 
+import sys
 import logging
 import Config
 import os
@@ -276,7 +277,7 @@ class Dataset(object):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    dataset = Dataset("TsinghuaX/30240184_2015X/2015_T1")
+    dataset = Dataset(sys.argv[1], sys.argv[2])
     dataset.generate_Y()
     dataset.generate_X()
     dataset.regenerate()
