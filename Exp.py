@@ -6,14 +6,15 @@
 # TODO:
 
 from dfg_minibatch import MetaDFG
-import Config as config
+import Config
 import cPickle as pickle
 import datetime
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
-def run(Dir):
+def run(config):
     with open(config.getPklDir(), 'rb') as f:
         Y, X, user_id, T = pickle.load(f)
     print X.shape, Y.shape
@@ -37,7 +38,7 @@ def run(Dir):
     #X_train = np.zeros((n_step, n_seq, n_in))
     #X_test = np.zeros((Y_test.shape[0], n_seq, n_in))
     cert_pred = dfg.fit(Y_train=Y_train, X_train=X_train, Y_test=Y_test, X_test=X_test, validation_frequency=None)
-    with open(Dir, 'wb') as f:
+    with open(config.getPredictionResultDir(), 'wb') as f:
         for i in xrange(len(user_id)):
             print >> f, '\t'.join([str(user_id[i]), str(cert_pred[i])])
     print datetime.datetime.now() - start
@@ -46,4 +47,5 @@ def run(Dir):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(message)s') # include timestamp
-    run(config.getPredictionResultDir())
+    config = Config(sys.argv[1], sys.argv[2])
+    run(config)

@@ -5,6 +5,9 @@
 
 import json
 import util
+import logging
+
+logger = logging.getLogger(__name__)
 
 #def getDataDir():
 #    return '/home/jiezhong/prediction/certificate'
@@ -51,6 +54,7 @@ class Config(object):
         self.course = course
         with open(fn, 'rb') as f:
             self.config = json.load(f)
+        logger.info('Loading config for %s from file %s', course, fn)
 
     def getThreshold(self):
         # return the threshold of grade
