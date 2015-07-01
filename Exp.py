@@ -15,10 +15,9 @@ logger = logging.getLogger(__name__)
 
 def run(Dir):
     with open(config.getPklDir(), 'rb') as f:
-        Y, X, user_id = pickle.load(f)
+        Y, X, user_id, T = pickle.load(f)
     print X.shape, Y.shape
     n_in = X.shape[2]
-    T = -2
     Y_train = Y[:T]
     Y_test = Y[T:]
     X_train = X[:T]

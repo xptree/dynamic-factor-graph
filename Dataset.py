@@ -4,7 +4,7 @@
 # Author: Jiezhong Qiu
 
 import logging
-import Config as config
+import Config
 import os
 from bson import json_util
 import util
@@ -17,19 +17,20 @@ EPS=1e-2
 logger = logging.getLogger(__name__)
 
 class Dataset(object):
-    def __init__(self, course):
+    def __init__(self, course, configFile):
         '''generate_Y data as the following format
             feature[uid][T] is a list of features for user uid at time T
             the feature shoule be additive
             we remove register-only student from the dataset
         '''
         self.course = course
+        self.config = Config(course, configFile)
         self.feature = {}
         self.feature_num = 0
-        self.path = config.getDataDir()
+        self.path = self.config.getDataDir()
         self.getUser()
-        self.start = config.getStart(self.course)
-        self.end = config.getEnd(self.course)
+        self.start = self.config.getStart(self.course)
+        self.end = self.config.getEnd(self.course)
         for uid in self.feature:
             for single_date in util.daterange(self.start, self.end):
                 self.feature[uid][single_date] = []
@@ -146,17 +147,8 @@ class Dataset(object):
             else:
                 pickle.dump(self.feature, file, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def save_dataset(self, fpath='.', fname=None):
-        fpathstart, fpathext = os.path.splitext(fpath)
-        if fpathext == '.pkl':
-            fpath, fname = os.path.split(fpath)
-        elif fname is None:
-            # generate_Y filename based on date
-            date_obj = datetime.datetime.now()
-            date_str = date_obj.strftime('%Y-%m-%d-%H:%M:%S')
-            class_name = self.__class__.__name__
-            fname = '%s.%s.pkl' % (class_name, date_str)
-        fabspath = os.path.join(fpath, fname)
+    def save_dataset(self):
+        fabspath = self.config.getPklFile()
         logger.info('Saving dataset to %s shape=(%d, %d, %d)...' % (fabspath, len(self.ddls)+1, len(self.feature), self.feature_num))
         # n_step x n_seq x n_obsv
         n_step = len(self.ddls) + 1
@@ -179,12 +171,14 @@ class Dataset(object):
                 for i in xrange(self.n_in):
                     X[T][index][i] = self.X[uid][T][i]
 
+        now = datetime.date.today() + datetime.timedelta(days=1)
+        now = self.getTimeStamp(now)
         with open(fabspath, 'wb') as file:
-            pickle.dump((dataset, X, user_id), file, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump((dataset, X, user_id, now), file, protocol=pickle.HIGHEST_PROTOCOL)
         self.dataset = dataset
 
     def getDDL(self):
-        self.ddls = config.getDDL(self.course)
+        self.ddls = self.config.getDDL()
 
     def getStageFeature(self):
         feature = {}
@@ -262,7 +256,7 @@ class Dataset(object):
         self.getLearningData()
         self.getBehaviorData()
         self.getStageFeature()
-        threshold = config.getThreshold(self.course)
+        threshold = self.config.getThreshold()
         self.filte(filter_type='binary', threshold=threshold)
 
     def generate_X(self):
@@ -286,4 +280,4 @@ if __name__ == "__main__":
     dataset.generate_Y()
     dataset.generate_X()
     dataset.regenerate()
-    dataset.save_dataset(config.getPklDir())
+    dataset.save_dataset()
