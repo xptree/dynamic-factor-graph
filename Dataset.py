@@ -5,7 +5,7 @@
 
 import sys
 import logging
-import Config
+from Config import Config
 import os
 from bson import json_util
 import util
@@ -28,10 +28,10 @@ class Dataset(object):
         self.config = Config(course, configFile)
         self.feature = {}
         self.feature_num = 0
-        self.path = self.config.getDataDir()
+        self.path = self.config.getJsonDir()
         self.getUser()
-        self.start = self.config.getStart(self.course)
-        self.end = self.config.getEnd(self.course)
+        self.start = self.config.getStart()
+        self.end = self.config.getEnd()
         for uid in self.feature:
             for single_date in util.daterange(self.start, self.end):
                 self.feature[uid][single_date] = []
@@ -191,6 +191,7 @@ class Dataset(object):
                 feature[uid][delta] = self.feature[uid][single_date]
         sample = self.ddls + [self.end - datetime.timedelta(1)]
         sample = [(item - self.start).days for item in sample]
+        print len(sample), sample
         self.feature = {}
         for uid in feature:
             if uid in self.score:

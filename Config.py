@@ -6,6 +6,7 @@
 import json
 import util
 import logging
+from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
@@ -24,22 +25,35 @@ logger = logging.getLogger(__name__)
 #    title["TsinghuaX/30240184_2015X/2015_T1"] = date(2015, 7, 5)
 #    return title[course]
 #
-#def getDDL(course):
-#    if course == "TsinghuaX/30240184_2015X/2015_T1":
-#        ddl = []
-#        with open('../element.json', 'rb') as f:
-#            element = json.load(f)
-#        for k,v in element.iteritems():
-#            if k.find('30240184') > -1 and v['due'] is not None:
-#                dt = datetime.strptime(v['due'], '%Y-%m-%dT%H:%M:%S')
-#                dt = util.roundTime(dt, 60 * 60)
-#                ddl.append(dt.date())
-#        ddl.sort()
-#        ddl[-1] = date(2015, 6, 30)
-#        return ddl
-#    else:
-#        raise NotImplementedError
-#
+def getDDL(course):
+    if course == "TsinghuaX/30240184_2015X/2015_T1":
+        ddl = []
+        with open('../element.json', 'rb') as f:
+            element = json.load(f)
+        for k,v in element.iteritems():
+            if k.find('30240184') > -1 and v['due'] is not None:
+                dt = datetime.strptime(v['due'], '%Y-%m-%dT%H:%M:%S')
+                dt = util.roundTime(dt, 60 * 60)
+                ddl.append(dt.date())
+        ddl.sort()
+        ddl[-1] = date(2015, 6, 30)
+        ddl = [item.strftime("%Y-%m-%d") for item in ddl]
+        print json.dumps(ddl)
+        return ddl
+    else:
+        ddl = []
+        with open('../Json/element.json', 'rb') as f:
+            element = json.load(f)
+        for k,v in element.iteritems():
+            if k.find('00690242_2015X') > -1 and v['start'] is not None:
+                dt = datetime.strptime(v['start'], '%Y-%m-%dT%H:%M:%S')
+                dt = util.roundTime(dt, 60 * 60)
+                ddl.append(dt.date())
+        ddl.sort()
+        ddl = [item.strftime("%Y-%m-%d") for item in ddl]
+        print json.dumps(ddl)
+        return ddl
+
 #def getThreshold(course):
 #    return 0.8
 #
@@ -64,9 +78,9 @@ class Config(object):
         # return the pkl file which stores the feature vector for each user in every timestamp
         return self.config["pklFile"]
 
-    def getPredictionResultDir(self):
+    def getPredictionResultFile(self):
         # return the prediction result dir
-        return self.config["predictionResultDir"]
+        return self.config["predictionResultFile"]
 
     def getJsonDir(self):
         # returen json dir which store the result of Feature.py
@@ -84,5 +98,10 @@ class Config(object):
         # a list of ddls
         return [util.parseDate(item) for item in self.config['ddl']]
 
+    def getJsonDir(self):
+        return self.config['jsonDir']
+
 if __name__ == '__main__':
-    config = Config("TsinghuaX/30240184_2015X/2015_T1", 'dsa.json')
+    #getDDL("TsinghuaX/30240184_2015X/2015_T1")
+    getDDL("TsinghuaX/00690242_2015X/2015_T1")
+    #config = Config("TsinghuaX/30240184_2015X/2015_T1", 'dsa.json')
